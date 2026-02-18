@@ -219,6 +219,18 @@ export async function getMarketApiStatus() {
   return response.json();
 }
 
+export async function setAgentAutoReprice(role: "seller" | "buyer", enabled: boolean) {
+  const response = await fetch(`${MARKET_API_URL}/agent-config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role, auto_reprice: enabled }),
+  });
+  if (!response.ok) {
+    throw new Error(`Agent config update failed: ${response.status}`);
+  }
+  return response.json();
+}
+
 export function optionalToNumber(
   value: number | string | null | { tag: "Some" | "None"; value?: number | string },
 ): number | null {

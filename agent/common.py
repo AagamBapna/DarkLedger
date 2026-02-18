@@ -17,6 +17,10 @@ from llm_advisor import LLMAdvice
 log = logging.getLogger(__name__)
 
 DECISION_LOG_TEMPLATE = "AgenticShadowCap.Market:AgentDecisionLog"
+DEFAULT_AGENT_CONTROLS = {
+    "seller_auto_reprice": True,
+    "buyer_auto_reprice": True,
+}
 
 
 def to_decimal(value: Any) -> Decimal:
@@ -47,6 +51,16 @@ def make_side(tag: str) -> dict[str, Any]:
     return {"tag": tag, "value": {}}
 
 
+def parse_party_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    parties: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            parties.append(item)
+    return parties
+
+
 def load_market_data(feed_path: Path) -> dict[str, Any]:
     if not feed_path.exists():
         return {"market_volatility": "0.20", "news_sentiment": "neutral"}
@@ -57,6 +71,21 @@ def load_market_data(feed_path: Path) -> dict[str, Any]:
         return payload
     except Exception:
         return {"market_volatility": "0.20", "news_sentiment": "neutral"}
+
+
+def load_agent_controls(control_path: Path) -> dict[str, Any]:
+    if not control_path.exists():
+        return dict(DEFAULT_AGENT_CONTROLS)
+    try:
+        payload = json.loads(control_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return dict(DEFAULT_AGENT_CONTROLS)
+        return {
+            "seller_auto_reprice": bool(payload.get("seller_auto_reprice", True)),
+            "buyer_auto_reprice": bool(payload.get("buyer_auto_reprice", True)),
+        }
+    except Exception:
+        return dict(DEFAULT_AGENT_CONTROLS)
 
 
 async def retry_exercise(conn: Any, cid: Any, choice: str, args: dict, retries: int = 3) -> Any:

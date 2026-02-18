@@ -18,6 +18,7 @@ export interface DiscoveryInterestPayload {
   issuer: string;
   owner: string;
   postingAgent: string;
+  discoverableBy: string[];
   instrument: string;
   side: string | { tag?: string };
   strategyTag: string;

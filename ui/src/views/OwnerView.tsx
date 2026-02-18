@@ -38,6 +38,11 @@ export function OwnerView({
 }: OwnerViewProps) {
   const [draftOverrides, setDraftOverrides] = useState<Record<string, string>>({});
   const canOverride = party === "SellerAgent";
+  const canToggleAutoReprice =
+    party === "Seller"
+    || party === "SellerAgent"
+    || party === "Buyer"
+    || party === "BuyerAgent";
 
   const timeline = useMemo(
     () => logs.filter((entry) => entry.source !== "market-feed").slice(0, 12),
@@ -110,6 +115,7 @@ export function OwnerView({
               type="checkbox"
               className="h-4 w-4 accent-signal-mint"
               checked={autoReprice}
+              disabled={!canToggleAutoReprice}
               onChange={(e) => onAutoRepriceToggle(e.target.checked)}
             />
             AI agent auto-reprice

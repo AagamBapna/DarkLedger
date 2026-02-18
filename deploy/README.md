@@ -13,7 +13,7 @@
 make demo
 ```
 
-This will: build DAR → start Canton nodes → upload DAR → start agents → start UI.
+This will: build DAR → start Canton nodes + JSON API proxy → upload DAR → seed demo contracts → start agents → start UI.
 
 ## Step-by-Step
 
@@ -28,7 +28,7 @@ cd daml && daml build
 ```bash
 make up
 # or manually:
-docker compose -f deploy/docker-compose.yml up -d domain seller-participant buyer-participant issuer-participant
+docker compose -f deploy/docker-compose.yml up -d domain seller-participant buyer-participant issuer-participant json-api-proxy
 ```
 
 Node layout:
@@ -43,6 +43,12 @@ make upload
 ```
 
 ### 4) Start AI Agents
+### 4) Seed Demo Contracts
+```bash
+make seed
+```
+
+### 5) Start AI Agents
 ```bash
 make agents
 ```
@@ -58,22 +64,22 @@ export OPENAI_API_KEY=sk-...
 make agents
 ```
 
-### 5) Start React UI
+### 6) Start React UI
 ```bash
 make ui
 ```
 
 Open http://localhost:5173
 
-### 6) Privacy Verification
+### 7) Privacy Verification
 
 1. Switch to **Seller** perspective → see TradeIntents, holdings
-2. Switch to **Buyer** perspective → see empty state (no seller data visible)
-3. Switch to **Company** perspective → see compliance queue
-4. After agents match and negotiate, all parties see only their own data
-5. Use the **News Event Injector** to trigger agent repricing live
+2. Switch to **Buyer** perspective → seller `TradeIntent` remains invisible
+3. Switch to **BuyerAgent** perspective → blind sell `DiscoveryInterest` is visible (instrument+side only)
+4. Switch to **Company** perspective → see compliance queue and settlement actions
+5. Use **News Event Injector** and auto-reprice toggle to drive/verify live agent behavior
 
-### 7) Sandbox Demo (No Docker)
+### 8) Sandbox Demo (No Docker)
 
 ```bash
 make sandbox
@@ -81,7 +87,7 @@ make sandbox
 
 Runs the full lifecycle locally via `daml script`.
 
-### 8) Shutdown
+### 9) Shutdown
 
 ```bash
 make down        # stop Docker containers
@@ -89,8 +95,12 @@ make agents-stop # stop Python agents
 make ui-stop     # stop Vite dev server
 ```
 
-### 9) Check Status
+### 10) Check Status
 
 ```bash
 make status
 ```
+
+## Canton L1 Devnet
+
+See `deploy/devnet/README.md` for the Devnet deployment runbook and submission evidence checklist.

@@ -44,7 +44,7 @@ The default view for `Seller`, `SellerAgent`, `Buyer`, and `BuyerAgent` parties.
 - **Active Trade Intents**: Instrument, quantity, `minPrice`, last agent update timestamp
 - **Negotiation Status**: Active `PrivateNegotiation` contracts (if any)
 - **Agent Timeline**: History of agent actions (`UpdatePrice`, `SubmitSellerTerms`, `AcceptBySeller`)
-- **Manual Controls**: Override `minPrice`, toggle agent auto-reprice
+- **Manual Controls**: Override `minPrice`, toggle agent auto-reprice (writes to Market API `/agent-config`)
 
 ### Market View
 
@@ -58,7 +58,8 @@ Intentionally minimal — reflects the zero-knowledge stance of the dark pool.
 Available to the `Company` (issuer) party.
 
 - **Pending Negotiations**: Queue of `PrivateNegotiation` contracts with acceptance status
-- **ROFR Action**: `ApproveMatch` button with optional audit memo
+- **ROFR Action**: `ApproveMatch` button
+- **Atomic DvP Finalization**: `FinalizeSettlement` (requires eligible seller asset + buyer cash contracts)
 - **Settlement Monitor**: `TradeSettlement` contracts and finalization status
 
 ### Agent Logs View
@@ -75,7 +76,8 @@ Streaming log table showing agent decision history.
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_LEDGER_API_URL` | `http://localhost:7575` | Base URL for the JSON API proxy |
+| `VITE_JSON_API_URL` | `http://localhost:7575` | Base URL for the JSON API proxy |
+| `VITE_MARKET_API_URL` | `http://localhost:8090` | Market API URL (events + agent controls) |
 | `VITE_POLL_INTERVAL_MS` | `3000` | Polling interval for contract queries (ms) |
 
 Create a `.env` file in the `ui/` directory or set these via shell exports before running.

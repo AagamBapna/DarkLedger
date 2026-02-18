@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { exerciseChoice, optionalToNumber, queryAuditRecords, TEMPLATE_IDS } from "../lib/ledgerClient";
 import type {
+  AssetHoldingPayload,
+  CashHoldingPayload,
   ContractRecord,
   Party,
   PrivateNegotiationPayload,
@@ -12,6 +14,8 @@ interface ComplianceViewProps {
   party: Party;
   negotiations: Array<ContractRecord<PrivateNegotiationPayload>>;
   settlements: Array<ContractRecord<TradeSettlementPayload>>;
+  assetHoldings: Array<ContractRecord<AssetHoldingPayload>>;
+  cashHoldings: Array<ContractRecord<CashHoldingPayload>>;
   onApproveMatch: (contractId: string) => Promise<void>;
 }
 
@@ -23,7 +27,14 @@ function settlementStep(s: TradeSettlementPayload): number {
   return 3;
 }
 
-export function ComplianceView({ party, negotiations, settlements, onApproveMatch }: ComplianceViewProps) {
+export function ComplianceView({
+  party,
+  negotiations,
+  settlements,
+  assetHoldings,
+  cashHoldings,
+  onApproveMatch,
+}: ComplianceViewProps) {
   const isIssuer = party === "Company";
   const [auditRecords, setAuditRecords] = useState<ContractRecord<TradeAuditRecordPayload>[]>([]);
   const [settling, setSettling] = useState<string | null>(null);
@@ -53,11 +64,18 @@ export function ComplianceView({ party, negotiations, settlements, onApproveMatc
     setSettling(null);
   };
 
-  const handleFinalize = async (contractId: string) => {
+  const handleFinalize = async (
+    contractId: string,
+    sellerAssetCid: string,
+    buyerCashCid: string,
+  ) => {
     setSettling(contractId);
     setActionError(null);
     try {
-      await exerciseChoice(party, TEMPLATE_IDS.tradeSettlement, contractId, "SimpleFinalizeSettlement", {});
+      await exerciseChoice(party, TEMPLATE_IDS.tradeSettlement, contractId, "FinalizeSettlement", {
+        sellerAssetCid,
+        buyerCashCid,
+      });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "FinalizeSettlement failed");
     }
@@ -131,6 +149,16 @@ export function ComplianceView({ party, negotiations, settlements, onApproveMatc
             {settlements.map((item) => {
               const step = settlementStep(item.payload);
               const totalValue = Number(item.payload.quantity) * Number(item.payload.unitPrice);
+              const sellerAsset = assetHoldings.find((holding) =>
+                holding.payload.owner === item.payload.seller
+                && holding.payload.instrument === item.payload.instrument
+                && Number(holding.payload.quantity) >= Number(item.payload.quantity)
+              );
+              const buyerCash = cashHoldings.find((holding) =>
+                holding.payload.owner === item.payload.buyer
+                && Number(holding.payload.amount) >= totalValue
+              );
+              const canFinalizeDvP = Boolean(sellerAsset && buyerCash);
               return (
                 <article key={item.contractId} className="rounded-lg border border-shell-700 bg-shell-950/50 p-4">
                   <div className="flex items-center justify-between">
@@ -180,11 +208,16 @@ export function ComplianceView({ party, negotiations, settlements, onApproveMatc
                   {!item.payload.settled && isIssuer && (
                     <button
                       className="mt-3 rounded-md bg-signal-mint px-3 py-1.5 text-sm font-semibold text-shell-950 disabled:opacity-50"
-                      disabled={settling === item.contractId}
-                      onClick={() => handleFinalize(item.contractId)}
+                      disabled={settling === item.contractId || !canFinalizeDvP}
+                      onClick={() => handleFinalize(item.contractId, sellerAsset!.contractId, buyerCash!.contractId)}
                     >
-                      {settling === item.contractId ? "Finalizing..." : "Finalize DvP Settlement"}
+                      {settling === item.contractId ? "Finalizing..." : "Finalize Atomic DvP"}
                     </button>
+                  )}
+                  {!item.payload.settled && isIssuer && !canFinalizeDvP && (
+                    <p className="mt-2 text-xs text-signal-coral">
+                      Missing eligible seller asset or buyer cash contract for atomic DvP finalization.
+                    </p>
                   )}
                   {actionError && settling === null && (
                     <p className="mt-2 text-sm text-signal-coral">{actionError}</p>

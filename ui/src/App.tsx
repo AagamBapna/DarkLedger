@@ -8,6 +8,7 @@ import {
   queryAssetHoldings,
   queryCashHoldings,
   queryPrivateNegotiations,
+  setAgentAutoReprice,
   queryTradeIntents,
   queryTradeSettlements
 } from "./lib/ledgerClient";
@@ -57,6 +58,16 @@ function counterpartyPseudonym(
     return `Seller-${payload.seller.slice(0, 6)}`;
   }
   return `Pair-${payload.instrument.slice(0, 6)}`;
+}
+
+function agentRoleForParty(party: string): "seller" | "buyer" | null {
+  if (party === "Seller" || party === "SellerAgent") {
+    return "seller";
+  }
+  if (party === "Buyer" || party === "BuyerAgent") {
+    return "buyer";
+  }
+  return null;
 }
 
 export default function App() {
@@ -184,7 +195,17 @@ export default function App() {
     const poll = async () => {
       try {
         const result = await getMarketApiStatus();
-        if (!cancelled) setMarketApiOnline(result !== null);
+        if (!cancelled) {
+          setMarketApiOnline(result !== null);
+          const role = agentRoleForParty(party);
+          if (result?.agent_config && role) {
+            const key = `${role}_auto_reprice`;
+            const value = result.agent_config[key];
+            if (typeof value === "boolean") {
+              setAutoReprice(value);
+            }
+          }
+        }
       } catch {
         if (!cancelled) setMarketApiOnline(false);
       }
@@ -192,7 +213,39 @@ export default function App() {
     void poll();
     const timer = window.setInterval(poll, 10_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, []);
+  }, [party, setAutoReprice]);
+
+  const onAutoRepriceToggle = useCallback(
+    async (enabled: boolean) => {
+      setAutoReprice(enabled);
+      const role = agentRoleForParty(party);
+      if (!role) {
+        addLog({
+          source: "ui-action",
+          decision: "Auto-reprice toggle ignored",
+          metadata: `party=${party} has no agent role`,
+        });
+        return;
+      }
+      try {
+        await setAgentAutoReprice(role, enabled);
+        addLog({
+          source: "ui-action",
+          decision: "Auto-reprice toggled",
+          metadata: `role=${role} enabled=${String(enabled)}`,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Agent config update failed";
+        addLog({
+          source: "ui-action",
+          decision: "Auto-reprice toggle failed",
+          metadata: message,
+        });
+        setError(message);
+      }
+    },
+    [party, setAutoReprice, addLog]
+  );
 
   const onOverrideMinPrice = useCallback(
     async (contractId: string, nextMinPrice: number) => {
@@ -370,14 +423,7 @@ export default function App() {
             cashHoldings={cashHoldings}
             logs={logs}
             autoReprice={autoReprice}
-            onAutoRepriceToggle={(enabled) => {
-              setAutoReprice(enabled);
-              addLog({
-                source: "ui-action",
-                decision: "Auto-reprice toggled",
-                metadata: `enabled=${String(enabled)}`
-              });
-            }}
+            onAutoRepriceToggle={onAutoRepriceToggle}
             onOverrideMinPrice={onOverrideMinPrice}
             intentLastUpdate={intentLastUpdate}
           />
@@ -396,6 +442,8 @@ export default function App() {
             party={party}
             negotiations={negotiations}
             settlements={settlements}
+            assetHoldings={assetHoldings}
+            cashHoldings={cashHoldings}
             onApproveMatch={onApproveMatch}
           />
         ) : null}

@@ -33,12 +33,12 @@ Agents are **event-driven, dazl-based ledger streaming** applications. They main
 
 1. **Streams** `TradeIntent` contracts visible to `SellerAgent`
 2. **Reprices** intents based on external market volatility feed
-3. **Posts** sell-side `DiscoveryInterest` signals (no price or volume)
+3. **Posts** sell-side `DiscoveryInterest` signals (no price or volume), scoped to target counterparty agent visibility
 4. **Negotiates** in `PrivateNegotiation` — submits terms, accepts or counters buyer offers
 
 ### Buyer Agent (`buyer_agent.py`)
 
-1. **Watches** for sell-side `DiscoveryInterest` signals matching target instrument
+1. **Watches** for sell-side `DiscoveryInterest` signals explicitly discoverable to `BuyerAgent`
 2. **Posts** buy-side `DiscoveryInterest` when a matching sell signal appears
 3. **Negotiates** in `PrivateNegotiation` — accepts seller terms within ceiling, or counters
 
@@ -142,9 +142,11 @@ timestamp,market_volatility,source
 | `DISCOVERY_TEMPLATE` | `AgenticShadowCap.Market:DiscoveryInterest` | Discovery template ID |
 | `NEGOTIATION_TEMPLATE` | `AgenticShadowCap.Market:PrivateNegotiation` | Negotiation template ID |
 | `MARKET_FEED_PATH` | `./agent/mock_market_feed.json` | Path to volatility feed file |
+| `AGENT_CONTROL_PATH` | `./agent/agent_controls.json` | Shared auto-reprice control file |
 | `AGENT_POLL_SECONDS` | `5` | Polling interval for repricing / negotiation loops |
 | `MIN_TICK_CHANGE` | `0.01` | Minimum price change to trigger an update |
 | `SELLER_DISCOVERY_STRATEGY` | `SELL_WHISPER` | Strategy tag for discovery interests |
+| `SELLER_COUNTERPARTY_AGENT` | `BuyerAgent` | Counterparty agent that can discover seller signals |
 | `SELLER_COUNTER_MARKUP` | `1.00` | Markup multiplier for counter-offers |
 | `OPENAI_API_KEY` | — | OpenAI API key (optional; enables LLM decisions) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
@@ -160,12 +162,29 @@ timestamp,market_volatility,source
 | `DISCOVERY_TEMPLATE` | `AgenticShadowCap.Market:DiscoveryInterest` | Discovery template ID |
 | `NEGOTIATION_TEMPLATE` | `AgenticShadowCap.Market:PrivateNegotiation` | Negotiation template ID |
 | `MARKET_FEED_PATH` | `./agent/mock_market_feed.json` | Path to volatility feed file |
+| `AGENT_CONTROL_PATH` | `./agent/agent_controls.json` | Shared auto-reprice control file |
 | `AGENT_POLL_SECONDS` | `5` | Polling interval |
 | `BUYER_MAX_PRICE` | `110.00` | Maximum acceptable unit price |
 | `BUYER_DEFAULT_QTY` | `1000.00` | Default quantity for counter-offers |
 | `BUYER_DISCOVERY_STRATEGY` | `BUY_WHISPER` | Strategy tag for discovery interests |
+| `BUYER_COUNTERPARTY_AGENT` | `SellerAgent` | Counterparty agent that can discover buyer signals |
 | `OPENAI_API_KEY` | — | OpenAI API key (optional) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
+
+### Live Agent Controls
+
+`agent/market_api.py` exposes:
+
+- `GET /agent-config`: read current auto-reprice controls
+- `POST /agent-config`: update one role (`seller` or `buyer`)
+
+Example:
+
+```bash
+curl -X POST http://localhost:8090/agent-config \
+  -H "Content-Type: application/json" \
+  -d '{"role":"seller","auto_reprice":false}'
+```
 
 ---
 
@@ -186,6 +205,7 @@ pip install -r agent/requirements.txt
 ```bash
 export DAML_LEDGER_URL=http://localhost:5011
 export MARKET_FEED_PATH=agent/mock_market_feed.json
+export AGENT_CONTROL_PATH=agent/agent_controls.json
 python agent/seller_agent.py
 ```
 
@@ -194,6 +214,7 @@ python agent/seller_agent.py
 ```bash
 export DAML_LEDGER_URL=http://localhost:5021
 export MARKET_FEED_PATH=agent/mock_market_feed.json
+export AGENT_CONTROL_PATH=agent/agent_controls.json
 python agent/buyer_agent.py
 ```
 

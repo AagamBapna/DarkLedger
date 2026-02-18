@@ -25,7 +25,7 @@ AI agents autonomously negotiate private trades using Daml smart contracts, with
 
 ### Privacy Model
 - **TradeIntent**: Visible only to Seller + SellerAgent + Issuer
-- **DiscoveryInterest**: Blind signal — no price/volume. Only instrument + side
+- **DiscoveryInterest**: Blind signal (instrument + side only), visible to Issuer + explicitly targeted counterparty agent(s)
 - **PrivateNegotiation**: Created only after match. Visible only to matched parties + Issuer
 - **TradeSettlement**: DvP atomic swap with immutable audit trail
 - **AgentDecisionLog**: AI reasoning logged on-ledger per agent
@@ -56,10 +56,13 @@ make up
 # 3. Upload DAR to all nodes
 make upload
 
-# 4. Start AI agents + market event API
+# 4. Seed deterministic demo data (holdings + trade intent)
+make seed
+
+# 5. Start AI agents + market event API
 make agents
 
-# 5. Start React dashboard
+# 6. Start React dashboard
 make ui
 ```
 
@@ -79,6 +82,7 @@ agent/
 ├── buyer_agent.py       # Buyer's autonomous AI legal representative
 ├── llm_advisor.py       # LLM-powered pricing + negotiation advisor
 ├── market_api.py        # FastAPI sidecar for market event injection
+├── agent_controls.json  # Live agent control toggles (auto-reprice on/off)
 ├── mock_market_feed.json
 └── requirements.txt
 
@@ -95,14 +99,15 @@ ui/                      # React + TypeScript + Vite + Tailwind
 deploy/
 ├── docker-compose.yml   # Canton domain + 3 participant nodes + nginx proxy
 ├── canton/              # Per-node configs and bootstrap scripts
-└── json-api/nginx.conf  # Routes requests by X-Ledger-Party header
+├── json-api/nginx.conf  # Routes requests by X-Ledger-Party header
+└── scripts/seed_demo.py # Seeds holdings + trade intent for repeatable demos
 ```
 
 ## Workflow
 
 1. **Seller** posts a private `TradeIntent` (visible only to Seller, Agent, Issuer)
 2. **Seller Agent** reprices based on market data + LLM reasoning
-3. **Agents** post blind `DiscoveryInterest` signals (no price/volume exposed)
+3. **Agents** post blind `DiscoveryInterest` signals (no price/volume exposed), targeted only to counterpart agents + issuer
 4. **Issuer** matches opposite interests → creates `PrivateNegotiation`
 5. **Agents** negotiate privately, logging every decision on-ledger
 6. **Issuer** exercises `ApproveMatch` (ROFR/compliance gate)
@@ -116,9 +121,11 @@ deploy/
 - **On-Ledger Decision Audit**: Every AI decision logged with reasoning
 - **DvP Settlement**: Real asset + cash swap with change returned
 - **Live Market Events**: Inject news events from the UI to trigger agents
+- **Live Agent Controls**: Toggle seller/buyer auto-repricing from UI (`/agent-config`)
 - **Perspective Switching**: See the ledger as different parties
 - **Time-Bounded Negotiations**: Auto-expire stale negotiations
 - **Contract Keys**: Prevent duplicate discovery signals
+- **Deterministic Demo Seed**: `make seed` creates reproducible starting state
 
 ## Configuration
 
@@ -130,12 +137,19 @@ deploy/
 | `OPENAI_API_KEY` | (none) | OpenAI key for LLM decisions |
 | `AGENT_POLL_SECONDS` | `5` | Polling interval |
 | `MARKET_FEED_PATH` | `./agent/mock_market_feed.json` | Market data feed path |
+| `AGENT_CONTROL_PATH` | `./agent/agent_controls.json` | Shared auto-reprice toggle state |
+| `SELLER_COUNTERPARTY_AGENT` | `BuyerAgent` | Who can see seller discovery whispers |
+| `BUYER_COUNTERPARTY_AGENT` | `SellerAgent` | Who can see buyer discovery whispers |
 
 ### Environment Variables (UI)
 | Variable | Default | Description |
 |---|---|---|
 | `VITE_JSON_API_URL` | `http://localhost:7575` | JSON API proxy URL |
 | `VITE_MARKET_API_URL` | `http://localhost:8090` | Market event API URL |
+
+## Devnet Runbook
+
+For Canton L1 Devnet deployment steps and submission checklist, see `deploy/devnet/README.md`.
 
 ## License
 

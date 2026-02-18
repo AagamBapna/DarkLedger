@@ -26,8 +26,10 @@ from llm_advisor import get_pricing_advice, get_negotiation_advice
 from common import (
     to_decimal,
     optional_decimal,
+    parse_side,
     make_side,
     load_market_data,
+    load_agent_controls,
     retry_exercise,
     retry_create,
     log_decision,
@@ -55,6 +57,8 @@ class AgentConfig:
     min_tick_change: Decimal
     discovery_strategy_tag: str
     counter_offer_markup: Decimal
+    counterparty_agent_party: str
+    control_path: Path
 
     @staticmethod
     def from_env() -> "AgentConfig":
@@ -70,24 +74,58 @@ class AgentConfig:
             min_tick_change=Decimal(os.getenv("MIN_TICK_CHANGE", "0.01")),
             discovery_strategy_tag=os.getenv("SELLER_DISCOVERY_STRATEGY", "SELL_WHISPER"),
             counter_offer_markup=Decimal(os.getenv("SELLER_COUNTER_MARKUP", "1.00")),
+            counterparty_agent_party=os.getenv("SELLER_COUNTERPARTY_AGENT", "BuyerAgent"),
+            control_path=Path(os.getenv("AGENT_CONTROL_PATH", "./agent/agent_controls.json")),
         )
 
 
 async def repricing_loop(conn: Any, config: AgentConfig) -> None:
-    own_discoveries: set[str] = set()
     original_prices: dict[str, Decimal] = {}
     last_reprice_time: dict[Any, float] = {}
 
     while True:
         market_data = load_market_data(config.feed_path)
+        controls = load_agent_controls(config.control_path)
+        seller_auto_reprice = bool(controls.get("seller_auto_reprice", True))
         intents = await query_active(conn, config.template_id)
+        discoveries = await query_active(conn, config.discovery_template_id)
+
+        own_active_sell: set[str] = set()
+        for payload in discoveries.values():
+            instrument = payload.get("instrument", "")
+            if (
+                payload.get("postingAgent") == config.agent_party
+                and parse_side(payload.get("side")) == "Sell"
+                and instrument
+            ):
+                own_active_sell.add(instrument)
 
         for cid, payload in list(intents.items()):
             instrument = payload["instrument"]
             current = to_decimal(payload["minPrice"])
 
+            if instrument not in own_active_sell:
+                discoverable_by = [p for p in [config.counterparty_agent_party] if p]
+                try:
+                    await retry_create(conn, config.discovery_template_id, {
+                        "issuer": payload["issuer"],
+                        "owner": payload["seller"],
+                        "postingAgent": config.agent_party,
+                        "discoverableBy": discoverable_by,
+                        "instrument": instrument,
+                        "side": make_side("Sell"),
+                        "strategyTag": config.discovery_strategy_tag,
+                    })
+                    own_active_sell.add(instrument)
+                    log.info("[agent] posted sell DiscoveryInterest for %s", instrument)
+                except Exception as ex:
+                    log.warning("[agent] DiscoveryInterest failed: %s", ex)
+
             if instrument not in original_prices:
                 original_prices[instrument] = current
+
+            if not seller_auto_reprice:
+                continue
 
             now = _time.monotonic()
             last_t = last_reprice_time.get(cid, 0.0)
@@ -124,21 +162,6 @@ async def repricing_loop(conn: Any, config: AgentConfig) -> None:
                 await log_decision(conn, config.agent_party, config.owner_party, instrument, advice, market_data)
             except Exception as ex:
                 log.error("[agent] repricing failed: %s", ex)
-
-            if instrument not in own_discoveries:
-                try:
-                    await retry_create(conn, config.discovery_template_id, {
-                        "issuer": payload["issuer"],
-                        "owner": payload["seller"],
-                        "postingAgent": config.agent_party,
-                        "instrument": instrument,
-                        "side": make_side("Sell"),
-                        "strategyTag": config.discovery_strategy_tag,
-                    })
-                    own_discoveries.add(instrument)
-                    log.info("[agent] posted sell DiscoveryInterest for %s", instrument)
-                except Exception as ex:
-                    log.warning("[agent] DiscoveryInterest failed: %s", ex)
 
         await asyncio.sleep(config.poll_seconds)
 

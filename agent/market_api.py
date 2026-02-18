@@ -11,12 +11,14 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 FEED_PATH = Path(os.getenv("MARKET_FEED_PATH", "./agent/mock_market_feed.json"))
+CONTROL_PATH = Path(os.getenv("AGENT_CONTROL_PATH", "./agent/agent_controls.json"))
 
 app = FastAPI(title="Shadow-Cap Market Event API")
 
@@ -36,6 +38,10 @@ EVENT_VOLATILITY_MAP = {
 }
 
 last_decision: dict = {}
+DEFAULT_AGENT_CONFIG = {
+    "seller_auto_reprice": True,
+    "buyer_auto_reprice": True,
+}
 
 
 class MarketEvent(BaseModel):
@@ -46,8 +52,35 @@ class MarketEvent(BaseModel):
 class StatusResponse(BaseModel):
     healthy: bool
     feed_path: str
+    control_path: str
+    agent_config: dict
     last_decision: dict
     current_feed: dict
+
+
+class AgentConfigUpdate(BaseModel):
+    role: Literal["seller", "buyer"]
+    auto_reprice: bool
+
+
+def read_agent_config() -> dict:
+    if not CONTROL_PATH.exists():
+        return dict(DEFAULT_AGENT_CONFIG)
+    try:
+        payload = json.loads(CONTROL_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return dict(DEFAULT_AGENT_CONFIG)
+        return {
+            "seller_auto_reprice": bool(payload.get("seller_auto_reprice", True)),
+            "buyer_auto_reprice": bool(payload.get("buyer_auto_reprice", True)),
+        }
+    except Exception:
+        return dict(DEFAULT_AGENT_CONFIG)
+
+
+def write_agent_config(config: dict) -> None:
+    CONTROL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONTROL_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
 @app.post("/market-event")
@@ -68,6 +101,7 @@ def inject_market_event(event: MarketEvent):
 @app.get("/status", response_model=StatusResponse)
 def get_status():
     current = {}
+    config = read_agent_config()
     if FEED_PATH.exists():
         try:
             current = json.loads(FEED_PATH.read_text(encoding="utf-8"))
@@ -76,6 +110,8 @@ def get_status():
     return StatusResponse(
         healthy=True,
         feed_path=str(FEED_PATH),
+        control_path=str(CONTROL_PATH),
+        agent_config=config,
         last_decision=last_decision,
         current_feed=current,
     )
@@ -84,6 +120,19 @@ def get_status():
 @app.get("/events")
 def list_events():
     return {"events": list(EVENT_VOLATILITY_MAP.keys())}
+
+
+@app.get("/agent-config")
+def get_agent_config():
+    return read_agent_config()
+
+
+@app.post("/agent-config")
+def set_agent_config(update: AgentConfigUpdate):
+    current = read_agent_config()
+    current[f"{update.role}_auto_reprice"] = update.auto_reprice
+    write_agent_config(current)
+    return {"status": "ok", "config": current}
 
 
 def update_last_decision(data: dict):

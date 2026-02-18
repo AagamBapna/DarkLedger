@@ -21,11 +21,13 @@ createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer instrument =
   sellInterestCid <- submit sellerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = seller; postingAgent = sellerAgent
+      discoverableBy = [buyerAgent]
       instrument; side = Sell; strategyTag = "TEST_SELL"
 
   buyInterestCid <- submit buyerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = buyer; postingAgent = buyerAgent
+      discoverableBy = [sellerAgent]
       instrument; side = Buy; strategyTag = "TEST_BUY"
 
   submit issuer do
@@ -49,12 +51,14 @@ testHappyPathFullLifecycle = script do
   sellInterestCid <- submit sellerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = seller; postingAgent = sellerAgent
+      discoverableBy = [buyerAgent]
       instrument = "COMPANY-SERIES-A"; side = Sell
       strategyTag = "PASSIVE_LIQUIDITY"
 
   buyInterestCid <- submit buyerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = buyer; postingAgent = buyerAgent
+      discoverableBy = [sellerAgent]
       instrument = "COMPANY-SERIES-A"; side = Buy
       strategyTag = "ROFR_ELIGIBLE"
 
@@ -183,6 +187,30 @@ testNegotiationInvisibleToOutsider = script do
   pure ()
 
 -- ============================================================
+-- Privacy: Discovery signal visible only to targeted counterparties
+-- ============================================================
+
+testDiscoverySignalScopedVisibility : Script ()
+testDiscoverySignalScopedVisibility = script do
+  (seller, sellerAgent, _buyer, buyerAgent, issuer) <- setupParties
+  outsider <- allocatePartyWithHint "Outsider" (PartyIdHint "discovery-outsider")
+
+  _ <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = seller; postingAgent = sellerAgent
+      discoverableBy = [buyerAgent]
+      instrument = "COMPANY-SERIES-A"; side = Sell
+      strategyTag = "TARGETED_SIGNAL"
+
+  buyerAgentView <- query @DiscoveryInterest buyerAgent
+  length buyerAgentView === 1
+
+  outsiderView <- query @DiscoveryInterest outsider
+  length outsiderView === 0
+
+  pure ()
+
+-- ============================================================
 -- Validation: TradeIntent with quantity = 0 fails
 -- ============================================================
 
@@ -274,12 +302,14 @@ testMatchSameSideFails = script do
   sellInterest1 <- submit sellerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = seller; postingAgent = sellerAgent
+      discoverableBy = [buyerAgent]
       instrument = "COMPANY-SERIES-A"; side = Sell
       strategyTag = "WHISPER_A"
 
   sellInterest2 <- submit buyerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = buyer; postingAgent = buyerAgent
+      discoverableBy = [sellerAgent]
       instrument = "COMPANY-SERIES-A"; side = Sell
       strategyTag = "WHISPER_B"
 
@@ -299,12 +329,14 @@ testSelfMatchingFails = script do
   sellInterestCid <- submit sellerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = seller; postingAgent = sellerAgent
+      discoverableBy = []
       instrument = "COMPANY-SERIES-A"; side = Sell
       strategyTag = "SELF_SELL"
 
   buyInterestCid <- submit sellerAgent do
     createCmd DiscoveryInterest with
       issuer; owner = seller; postingAgent = sellerAgent
+      discoverableBy = []
       instrument = "COMPANY-SERIES-A"; side = Buy
       strategyTag = "SELF_BUY"
 

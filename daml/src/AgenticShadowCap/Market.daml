@@ -99,12 +99,13 @@ template DiscoveryInterest
     issuer : Party
     owner : Party
     postingAgent : Party
+    discoverableBy : [Party]
     instrument : Text
     side : Side
     strategyTag : Text
   where
     signatory postingAgent
-    observer owner, issuer
+    observer owner, issuer, discoverableBy
 
     key (postingAgent, instrument, side) : (Party, Text, Side)
     maintainer key._1

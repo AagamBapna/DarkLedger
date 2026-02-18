@@ -1,4 +1,4 @@
-.PHONY: build up down parties upload agents agents-stop ui ui-stop demo clean status
+.PHONY: build up down parties upload seed controls-reset agents agents-stop ui ui-stop demo clean status
 
 DAML_DIR   := daml
 DEPLOY_DIR := deploy
@@ -19,7 +19,7 @@ build:
 # ─── Docker Compose ──────────────────────────────────────────────────────────
 up:
 	@echo "==> Starting Canton domain + participant nodes..."
-	docker compose -f $(DEPLOY_DIR)/docker-compose.yml up -d domain seller-participant buyer-participant issuer-participant
+	docker compose -f $(DEPLOY_DIR)/docker-compose.yml up -d domain seller-participant buyer-participant issuer-participant json-api-proxy
 	@echo "==> Waiting for nodes to become healthy..."
 	@sleep 20
 	@echo "==> Nodes are up."
@@ -44,6 +44,15 @@ upload:
 	daml ledger upload-dar $(DAR_FILE) --host localhost --port $(ISSUER_PORT)
 	@echo "==> DAR uploaded to all nodes."
 
+seed:
+	@echo "==> Seeding demo contracts (holdings + trade intent)..."
+	python3 $(DEPLOY_DIR)/scripts/seed_demo.py
+	@echo "==> Seed complete."
+
+controls-reset:
+	@echo "==> Resetting agent controls to defaults..."
+	printf '{\n  "seller_auto_reprice": true,\n  "buyer_auto_reprice": true\n}\n' > $(AGENT_DIR)/agent_controls.json
+
 # ─── Python Agents ───────────────────────────────────────────────────────────
 agents:
 	@echo "==> Installing Python dependencies..."
@@ -53,6 +62,7 @@ agents:
 		SELLER_AGENT_PARTY=SellerAgent \
 		SELLER_PARTY=Seller \
 		MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
+		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
 		python $(AGENT_DIR)/seller_agent.py &
 	@echo "==> Starting buyer agent..."
 	PYTHONUNBUFFERED=1 DAML_LEDGER_URL=http://localhost:$(BUYER_PORT) \
@@ -60,9 +70,11 @@ agents:
 		BUYER_PARTY=Buyer \
 		TARGET_INSTRUMENT=COMPANY-SERIES-A \
 		MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
+		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
 		python $(AGENT_DIR)/buyer_agent.py &
 	@echo "==> Starting market event API..."
 	MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
+		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
 		uvicorn agent.market_api:app --host 0.0.0.0 --port 8090 &
 	@echo "==> All agents running in background."
 
@@ -105,6 +117,8 @@ demo:
 	$(MAKE) build
 	$(MAKE) up
 	$(MAKE) upload
+	$(MAKE) seed
+	$(MAKE) controls-reset
 	$(MAKE) agents
 	$(MAKE) ui
 	@echo ""

@@ -63,6 +63,7 @@ mvpBootstrap = script do
         issuer
         owner = seller
         postingAgent = sellerAgent
+        discoverableBy = [buyerAgent]
         instrument = "COMPANY-SERIES-A"
         side = Sell
         strategyTag = "PASSIVE_LIQUIDITY"
@@ -73,6 +74,7 @@ mvpBootstrap = script do
         issuer
         owner = buyer
         postingAgent = buyerAgent
+        discoverableBy = [sellerAgent]
         instrument = "COMPANY-SERIES-A"
         side = Buy
         strategyTag = "ROFR_ELIGIBLE"

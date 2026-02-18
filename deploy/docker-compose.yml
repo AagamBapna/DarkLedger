@@ -98,6 +98,7 @@ services:
       DISCOVERY_TEMPLATE: AgenticShadowCap.Market:DiscoveryInterest
       NEGOTIATION_TEMPLATE: AgenticShadowCap.Market:PrivateNegotiation
       MARKET_FEED_PATH: /workspace/agent/mock_market_feed.json
+      AGENT_CONTROL_PATH: /workspace/agent/agent_controls.json
       AGENT_POLL_SECONDS: "5"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
@@ -127,6 +128,7 @@ services:
       DISCOVERY_TEMPLATE: AgenticShadowCap.Market:DiscoveryInterest
       NEGOTIATION_TEMPLATE: AgenticShadowCap.Market:PrivateNegotiation
       MARKET_FEED_PATH: /workspace/agent/mock_market_feed.json
+      AGENT_CONTROL_PATH: /workspace/agent/agent_controls.json
       AGENT_POLL_SECONDS: "5"
       BUYER_MAX_PRICE: "110.00"
       BUYER_DEFAULT_QTY: "1000.00"
@@ -147,6 +149,7 @@ services:
       ]
     environment:
       MARKET_FEED_PATH: /workspace/agent/mock_market_feed.json
+      AGENT_CONTROL_PATH: /workspace/agent/agent_controls.json
     ports:
       - "8090:8090"
     volumes:
