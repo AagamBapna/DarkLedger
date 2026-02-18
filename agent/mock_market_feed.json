@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-02-18T05:00:00Z",
-  "market_volatility": 0.38,
-  "news_sentiment": "speculative",
-  "event_type": "acquisition_rumor",
+  "timestamp": "2026-02-18T19:44:08.797707+00:00",
+  "market_volatility": 0.12,
+  "news_sentiment": "positive",
+  "event_type": "positive_earnings",
   "source": "injected-event"
 }

@@ -72,7 +72,7 @@ This is the core innovation. Canton's sub-transaction privacy ensures **no globa
 ## Quick Start
 
 ### Prerequisites
-- [Daml SDK 2.10.x](https://docs.daml.com/getting-started/installation.html)
+- [Daml SDK 3.4.x](https://docs.digitalasset.com/build/3.4/getting-started/installation.html)
 - [Docker + Docker Compose](https://docs.docker.com/get-docker/)
 - [Node.js 18+](https://nodejs.org/) (for the React UI)
 - Python 3.10+ (for agents)
@@ -181,7 +181,7 @@ All contracts are in `daml/src/AgenticShadowCap/Market.daml`:
 
 ### Agent Framework (`agent/base_agent.py`)
 Both agents extend `BaseAgent`, which provides:
-- dazl connection to Canton participant node
+- dual connection modes: `dazl` (gRPC) or `http-json` via v1 compatibility gateway
 - Concurrent async loop execution
 - Market data + agent control loading
 - Ledger query/create/exercise with retry
@@ -256,6 +256,11 @@ Switch between parties to see Canton's privacy model in action:
 | `make ui` | Start React dev server |
 | `make demo` | Full end-to-end workflow |
 | `make sandbox` | Local sandbox demo (no Docker) |
+| `make devnet` | Deploy to Canton L1 (Splice LocalNet) |
+| `make devnet-demo` | Start Canton demo runtime against participant APIs |
+| `make canton-network-bootstrap` | DAR upload + party map + seed on Canton v2 APIs |
+| `make canton-network-demo` | Start gateway + agents + market API for Canton |
+| `make devnet-down` | Stop Canton L1 |
 | `make status` | Show running processes |
 | `make clean` | Remove build artifacts |
 
@@ -263,7 +268,7 @@ Switch between parties to see Canton's privacy model in action:
 
 ```
 daml/
-├── daml.yaml                    # SDK 2.10.3, parties, dependencies
+├── daml.yaml                    # SDK 3.4.10, parties, dependencies
 ├── src/AgenticShadowCap/
 │   ├── Market.daml              # 8 templates — the dark pool logic
 │   ├── MvpScript.daml           # End-to-end workflow simulation
@@ -271,7 +276,7 @@ daml/
 └── .daml/dist/                  # Compiled DAR
 
 agent/
-├── base_agent.py                # BaseAgent class (dazl connection framework)
+├── base_agent.py                # BaseAgent class (dazl + http-json modes)
 ├── seller_agent.py              # SellerAgent (extends BaseAgent)
 ├── buyer_agent.py               # BuyerAgent (extends BaseAgent)
 ├── llm_advisor.py               # LLM pricing + negotiation advisor
@@ -295,6 +300,7 @@ ui/
 deploy/
 ├── docker-compose.yml           # 8-service Canton deployment
 ├── canton/                      # Node configs + bootstrap scripts
+├── canton_network/              # Canton v2 bootstrap + v1 compatibility gateway
 ├── json-api/nginx.conf          # Party-based request routing
 ├── scripts/seed_demo.py         # Deterministic demo seeding
 └── devnet/                      # Canton L1 Devnet deployment guide
@@ -318,7 +324,9 @@ deploy/
 ### Environment Variables (Agents)
 | Variable | Default | Description |
 |---|---|---|
-| `DAML_LEDGER_URL` | `http://localhost:5011` | Canton node gRPC endpoint |
+| `DAML_LEDGER_URL` | `http://localhost:5011` | gRPC endpoint (used in `dazl` mode) |
+| `DAML_LEDGER_MODE` | `dazl` | `dazl` or `http-json` |
+| `DAML_HTTP_JSON_URL` | (none) | v1 gateway endpoint for `http-json` mode |
 | `SELLER_AGENT_PARTY` | `SellerAgent` | Party ID for seller agent |
 | `BUYER_AGENT_PARTY` | `BuyerAgent` | Party ID for buyer agent |
 | `OPENAI_API_KEY` | (none) | OpenAI key for LLM decisions (optional) |
@@ -329,13 +337,34 @@ deploy/
 ### Environment Variables (UI)
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_JSON_API_URL` | `http://localhost:7575` | JSON API proxy URL |
+| `VITE_JSON_API_URL` | `http://localhost:8081` | v1 compatibility gateway URL |
 | `VITE_MARKET_API_URL` | `http://localhost:8090` | Market event API URL |
+| `VITE_JSON_API_USE_INSECURE_TOKEN` | `false` | Usually false when gateway handles auth |
 | `VITE_POLL_INTERVAL_MS` | `3000` | UI polling interval |
 
-## Devnet Deployment
+## Canton L1 Deployment
 
-For Canton L1 Devnet deployment steps and submission checklist, see `deploy/devnet/README.md`.
+### Quick Start
+```bash
+make devnet        # Start Canton L1 LocalNet + bootstrap contracts/parties
+make devnet-demo   # Start gateway + agents + market API on top of Canton
+make devnet-down   # Stop Canton L1
+```
+
+### What is Canton L1?
+The `make devnet` target deploys your dApp onto **Splice LocalNet** — the official
+local Canton Network topology from `digital-asset/decentralized-canton-sync`.
+It runs a Super Validator with Global Synchronizer, App Provider participant,
+and App User participant — the same stack used on Canton Network mainnet.
+
+### Key Ports
+- App Provider Ledger API: `localhost:3901`
+- App Provider JSON API: `localhost:3975`
+- App User Ledger API: `localhost:2901`
+- v1 compatibility gateway: `localhost:8081`
+- Scan Explorer: `http://scan.localhost:4000`
+
+For full deployment steps and submission checklist, see `deploy/devnet/README.md`.
 
 ## License
 

@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
 # ============================================================
-# Agentic Shadow-Cap — Canton L1 DevNet Validator Setup
+# Agentic Shadow-Cap — Canton L1 DevNet Deployment
 # ============================================================
 #
-# This script:
-#   1. Downloads and starts a Canton DevNet validator (splice-node)
-#   2. Uploads the Shadow-Cap DAR
-#   3. Allocates parties
-#   4. Seeds demo contracts
-#   5. Starts agents + market API
+# This script deploys Shadow-Cap onto a Canton L1 network using
+# Splice LocalNet — the official Canton Network local topology
+# from the splice-node release.
+#
+# LocalNet provides:
+#   - Super Validator (SV) with Global Synchronizer
+#   - App Provider participant + validator
+#   - App User participant + validator
+#   - PostgreSQL database
+#   - NGINX gateway with wallet/scan/sv UIs
+#
+# This is the same topology used by cn-quickstart (digital-asset)
+# and is the recommended deployment target for hackathon submissions.
 #
 # Prerequisites:
-#   - Docker Desktop running
-#   - Daml SDK 2.10.x installed
-#   - Python 3.10+
-#   - Internet access to DevNet (no VPN needed for public DevNet)
+#   - Docker Desktop running (8GB+ memory recommended)
+#   - Daml SDK 3.4.x installed
+#   - Python 3.10+ with venv
+#   - curl, tar
 #
 # Usage:
 #   cd canton
-#   bash deploy/devnet/setup_devnet_validator.sh
+#   make devnet
 # ============================================================
 
 set -euo pipefail
@@ -29,207 +36,291 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# ── Configuration ──────────────────────────────────────────
 CANTON_VERSION="${CANTON_VERSION:-0.5.10}"
-MIGRATION_ID="${MIGRATION_ID:-1}"
-VALIDATOR_NAME="${VALIDATOR_NAME:-shadowcap-hackathon}"
-CANTON_DIR="$HOME/.canton/${CANTON_VERSION}"
-SPLICE_DIR="${CANTON_DIR}/splice-node/docker-compose/validator"
 PROJECT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 DAR_FILE="${PROJECT_DIR}/daml/.daml/dist/agentic-shadow-cap-0.1.0.dar"
+SPLICE_DIR="${HOME}/.canton/${CANTON_VERSION}/splice-node/docker-compose"
+LOCALNET_DIR="${SPLICE_DIR}/localnet"
 
-SV_URL="${SV_URL:-https://sv.sv-1.dev.global.canton.network.sync.global}"
-SCAN_URL="${SCAN_URL:-https://scan.sv-1.dev.global.canton.network.sync.global}"
+# LocalNet port scheme (from docs.sync.global):
+#   App Provider: 3xxx, App User: 2xxx, SV: 4xxx
+#   Ledger API suffix: 901, JSON API suffix: 975
+APP_PROVIDER_LEDGER_PORT=3901
+APP_USER_LEDGER_PORT=2901
+SV_LEDGER_PORT=4901
+APP_PROVIDER_JSON_API_PORT=3975
+APP_USER_JSON_API_PORT=2975
 
-step() {
-  echo -e "\n${CYAN}==> $1${NC}"
+# ── Helpers ──────────────────────────────────────────────
+step() { echo -e "\n${CYAN}==> $1${NC}"; }
+ok()   { echo -e "  ${GREEN}OK${NC} $1"; }
+warn() { echo -e "  ${YELLOW}WARNING${NC} $1"; }
+fail_exit() { echo -e "  ${RED}FAILED${NC} $1"; exit 1; }
+
+wait_for_port() {
+  local port=$1 host=${2:-127.0.0.1} timeout=${3:-120}
+  local start=$(date +%s)
+  while true; do
+    if nc -z "$host" "$port" 2>/dev/null; then
+      return 0
+    fi
+    if (( $(date +%s) - start > timeout )); then
+      return 1
+    fi
+    sleep 2
+  done
 }
 
-ok() {
-  echo -e "  ${GREEN}OK${NC} $1"
+generate_unsafe_hs256_token() {
+  python3 - <<'PY'
+import base64
+import hashlib
+import hmac
+import json
+import os
+
+secret = os.environ.get("CANTON_INSECURE_SECRET", "unsafe").encode("utf-8")
+audience = os.environ.get("CANTON_INSECURE_AUDIENCE", "https://canton.network.global")
+subject = os.environ.get("CANTON_INSECURE_SUB", "ledger-api-user")
+header = {"alg": "HS256", "typ": "JWT"}
+payload = {"sub": subject, "aud": audience}
+
+def b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+
+def b64json(value: dict) -> str:
+    return b64(json.dumps(value, separators=(",", ":")).encode("utf-8"))
+
+unsigned = f"{b64json(header)}.{b64json(payload)}".encode("utf-8")
+signature = hmac.new(secret, unsigned, hashlib.sha256).digest()
+print(f"{unsigned.decode('utf-8')}.{b64(signature)}")
+PY
 }
 
-warn() {
-  echo -e "  ${YELLOW}WARNING${NC} $1"
-}
-
-fail_exit() {
-  echo -e "  ${RED}FAILED${NC} $1"
-  exit 1
-}
-
-# ── Pre-flight ──────────────────────────────────────────────
+# ── Banner ──────────────────────────────────────────────
 
 echo -e "${CYAN}============================================${NC}"
-echo -e "${CYAN}  Agentic Shadow-Cap — DevNet Setup${NC}"
+echo -e "${CYAN}  Agentic Shadow-Cap — Canton L1 Deployment${NC}"
 echo -e "${CYAN}============================================${NC}"
+echo ""
+echo -e "  Using Splice LocalNet v${CANTON_VERSION}"
+echo -e "  (Full Canton Network topology with"
+echo -e "   Super Validator + Global Synchronizer)"
+echo ""
 
-# Check Docker
+# ── Pre-flight checks ───────────────────────────────────
+
 step "Checking Docker..."
 docker info > /dev/null 2>&1 || fail_exit "Docker is not running. Start Docker Desktop first."
 ok "Docker is running"
 
-# Check Daml SDK
 step "Checking Daml SDK..."
 daml version > /dev/null 2>&1 || fail_exit "Daml SDK not found. Install from https://docs.daml.com/getting-started/installation.html"
 ok "Daml SDK found"
 
-# Check DAR exists
-step "Checking DAR file..."
-if [[ ! -f "$DAR_FILE" ]]; then
+step "Preparing DAR..."
+DAR_READY=false
+if [[ -f "$DAR_FILE" ]]; then
+  if daml damlc inspect-dar "$DAR_FILE" --json >/dev/null 2>&1; then
+    DAR_READY=true
+    ok "DAR found and readable: $DAR_FILE"
+  else
+    warn "Existing DAR is incompatible with current Daml SDK. Rebuilding."
+  fi
+fi
+
+if [[ "$DAR_READY" != "true" ]]; then
   echo "  Building DAR..."
   cd "$PROJECT_DIR" && make build
+  daml damlc inspect-dar "$DAR_FILE" --json >/dev/null 2>&1 || \
+    fail_exit "DAR exists but cannot be inspected by current Daml SDK."
+  ok "DAR built and validated: $DAR_FILE"
 fi
-[[ -f "$DAR_FILE" ]] && ok "DAR found: $DAR_FILE" || fail_exit "DAR not found at $DAR_FILE"
 
-# ── Step 1: Download splice-node ────────────────────────────
+# ── Step 1: Download splice-node ────────────────────────
 
-step "Downloading Canton splice-node v${CANTON_VERSION}..."
+step "Downloading splice-node v${CANTON_VERSION}..."
 
-if [[ -d "$SPLICE_DIR" ]]; then
-  ok "Already downloaded at $SPLICE_DIR"
+if [[ -d "$LOCALNET_DIR" ]]; then
+  ok "Already downloaded at $LOCALNET_DIR"
 else
-  mkdir -p "$CANTON_DIR"
-  cd "$CANTON_DIR"
+  mkdir -p "${HOME}/.canton/${CANTON_VERSION}"
+  cd "${HOME}/.canton/${CANTON_VERSION}"
 
   TARBALL="${CANTON_VERSION}_splice-node.tar.gz"
   DOWNLOAD_URL="https://github.com/digital-asset/decentralized-canton-sync/releases/download/v${CANTON_VERSION}/${TARBALL}"
 
   if [[ ! -f "$TARBALL" ]]; then
     echo "  Downloading from $DOWNLOAD_URL ..."
+    echo "  (This is ~500MB, may take a few minutes)"
     curl -L -o "$TARBALL" "$DOWNLOAD_URL" || fail_exit "Download failed. Check version ${CANTON_VERSION}"
   fi
 
   echo "  Extracting..."
   tar xzf "$TARBALL"
-  ok "Extracted to $SPLICE_DIR"
+  ok "Extracted splice-node"
 fi
 
-# ── Step 2: Get onboarding secret ───────────────────────────
+[[ -d "$LOCALNET_DIR" ]] || fail_exit "LocalNet directory not found at $LOCALNET_DIR"
+ok "LocalNet directory: $LOCALNET_DIR"
 
-step "Getting DevNet onboarding secret..."
+# ── Step 2: Stop any previous LocalNet ──────────────────
 
-SECRET=$(curl -sf -X POST "${SV_URL}/api/sv/v0/devnet/onboard/validator/prepare" 2>/dev/null || echo "")
-
-if [[ -z "$SECRET" ]]; then
-  warn "Could not get onboarding secret from sv-1, trying sv-2..."
-  SV_URL="https://sv.sv-2.dev.global.canton.network.sync.global"
-  SCAN_URL="https://scan.sv-2.dev.global.canton.network.sync.global"
-  SECRET=$(curl -sf -X POST "${SV_URL}/api/sv/v0/devnet/onboard/validator/prepare" 2>/dev/null || echo "")
-fi
-
-if [[ -z "$SECRET" ]]; then
-  fail_exit "Could not get onboarding secret. Check network connectivity to DevNet."
-fi
-ok "Onboarding secret obtained (valid for 1 hour)"
-
-# ── Step 3: Start validator ─────────────────────────────────
-
-step "Starting Canton DevNet validator..."
-
-cd "$SPLICE_DIR"
-
-# Enable unsafe auth for development
-if ! grep -q "compose-disable-auth.yaml" .env 2>/dev/null; then
-  cat >> .env << 'EOF'
-COMPOSE_FILE=compose.yaml:compose-disable-auth.yaml
-AUTH_URL=https://unsafe.auth
-SPLICE_APP_UI_NETWORK_FAVICON_URL=https://www.canton.network/hubfs/cn-favicon-05%201-1.png
-SPLICE_APP_UI_NETWORK_NAME="Canton Network"
-EOF
-fi
-
+step "Stopping any previous LocalNet..."
+export LOCALNET_DIR
 export IMAGE_TAG="${CANTON_VERSION}"
 
-./start.sh \
-  -s "$SV_URL" \
-  -o "$SECRET" \
-  -p "$VALIDATOR_NAME" \
-  -m "$MIGRATION_ID" \
-  -w
+cd "$LOCALNET_DIR"
 
-echo "  Waiting for validator to become healthy (this may take 2-5 minutes)..."
-for i in $(seq 1 60); do
-  if docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep -q 'splice.*healthy'; then
-    ok "Validator is healthy"
-    break
-  fi
-  if [[ $i -eq 60 ]]; then
-    warn "Validator not healthy after 5 minutes. Check: docker compose logs -f"
-  fi
-  sleep 5
-done
+docker compose \
+  --env-file "$LOCALNET_DIR/compose.env" \
+  --env-file "$LOCALNET_DIR/env/common.env" \
+  -f "$LOCALNET_DIR/compose.yaml" \
+  -f "$LOCALNET_DIR/resource-constraints.yaml" \
+  --profile sv \
+  --profile app-provider \
+  --profile app-user \
+  down -v 2>/dev/null || true
+ok "Previous instances cleaned up"
 
-# ── Step 4: Discover validator endpoints ────────────────────
+# ── Step 3: Start LocalNet ──────────────────────────────
 
-step "Discovering validator endpoints..."
+step "Starting Splice LocalNet (Canton L1)..."
+echo "  Starting Super Validator + App Provider + App User..."
+echo "  This may take 3-5 minutes for all nodes to become healthy."
 
-# Find the ledger API and JSON API ports
-LEDGER_PORT=$(docker compose port participant 5001 2>/dev/null | cut -d: -f2 || echo "")
-JSON_API_PORT=$(docker compose port json-api 7575 2>/dev/null | cut -d: -f2 || echo "")
+docker compose \
+  --env-file "$LOCALNET_DIR/compose.env" \
+  --env-file "$LOCALNET_DIR/env/common.env" \
+  -f "$LOCALNET_DIR/compose.yaml" \
+  -f "$LOCALNET_DIR/resource-constraints.yaml" \
+  --profile sv \
+  --profile app-provider \
+  --profile app-user \
+  up -d
 
-# Fallback: check common splice-node ports
-if [[ -z "$LEDGER_PORT" ]]; then
-  # Try to find the ledger API port from running containers
-  LEDGER_PORT=$(docker ps --format '{{.Ports}}' 2>/dev/null | grep -oP '\d+(?=->5001)' | head -1 || echo "")
-fi
+ok "LocalNet containers started"
 
-if [[ -z "$JSON_API_PORT" ]]; then
-  JSON_API_PORT=$(docker ps --format '{{.Ports}}' 2>/dev/null | grep -oP '\d+(?=->7575)' | head -1 || echo "")
-fi
+# ── Step 4: Wait for health ─────────────────────────────
 
-echo "  Ledger API port: ${LEDGER_PORT:-unknown}"
-echo "  JSON API port:   ${JSON_API_PORT:-unknown}"
+step "Waiting for Canton nodes to become healthy..."
 
-# ── Step 5: Upload DAR ──────────────────────────────────────
-
-step "Uploading DAR to DevNet validator..."
-
-if [[ -n "$LEDGER_PORT" ]]; then
-  daml ledger upload-dar "$DAR_FILE" --host localhost --port "$LEDGER_PORT" \
-    && ok "DAR uploaded to DevNet" \
-    || warn "DAR upload failed. You may need to upload manually."
+echo "  Waiting for App Provider ledger API (port $APP_PROVIDER_LEDGER_PORT)..."
+if wait_for_port "$APP_PROVIDER_LEDGER_PORT" 127.0.0.1 300; then
+  ok "App Provider ledger API is up"
 else
-  warn "Could not determine ledger API port. Upload manually:"
-  echo "  daml ledger upload-dar $DAR_FILE --host localhost --port <LEDGER_PORT>"
+  warn "App Provider ledger API not responding after 5 minutes"
+  echo "  Check logs: docker compose -f $LOCALNET_DIR/compose.yaml logs -f"
 fi
 
-# ── Step 6: Print next steps ────────────────────────────────
+echo "  Waiting for App User ledger API (port $APP_USER_LEDGER_PORT)..."
+if wait_for_port "$APP_USER_LEDGER_PORT" 127.0.0.1 120; then
+  ok "App User ledger API is up"
+else
+  warn "App User ledger API not responding"
+fi
+
+echo "  Waiting for App Provider JSON API (port $APP_PROVIDER_JSON_API_PORT)..."
+if wait_for_port "$APP_PROVIDER_JSON_API_PORT" 127.0.0.1 120; then
+  ok "App Provider JSON API is up"
+else
+  warn "App Provider JSON API not responding"
+fi
+
+# Additional settle time for the Canton domain to finish bootstrapping
+echo "  Allowing Canton domain 30s to complete synchronization..."
+sleep 30
+ok "Canton nodes appear healthy"
+
+# Show container status
+echo ""
+docker compose \
+  --env-file "$LOCALNET_DIR/compose.env" \
+  --env-file "$LOCALNET_DIR/env/common.env" \
+  -f "$LOCALNET_DIR/compose.yaml" \
+  -f "$LOCALNET_DIR/resource-constraints.yaml" \
+  --profile sv \
+  --profile app-provider \
+  --profile app-user \
+  ps --format "table {{.Name}}\t{{.Status}}"
+echo ""
+
+# ── Step 5: Bootstrap dApp on participant APIs ─────────
+
+step "Bootstrapping contracts + parties using JSON API v2..."
+cd "$PROJECT_DIR"
+
+if [[ ! -x "$PROJECT_DIR/.venv/bin/python" ]]; then
+  python3 -m venv "$PROJECT_DIR/.venv"
+fi
+"$PROJECT_DIR/.venv/bin/python" -m pip install -q --upgrade pip
+"$PROJECT_DIR/.venv/bin/python" -m pip install -q -r "$PROJECT_DIR/agent/requirements.txt"
+ok "Python runtime ready (.venv)"
+
+export CANTON_PROVIDER_URL="http://127.0.0.1:${APP_PROVIDER_JSON_API_PORT}"
+export CANTON_USER_URL="http://127.0.0.1:${APP_USER_JSON_API_PORT}"
+export CANTON_ALLOW_INSECURE_TOKEN="${CANTON_ALLOW_INSECURE_TOKEN:-true}"
+export CANTON_INSECURE_TOKEN_MODE="${CANTON_INSECURE_TOKEN_MODE:-hs256-unsafe}"
+export CANTON_INSECURE_SECRET="${CANTON_INSECURE_SECRET:-unsafe}"
+export CANTON_INSECURE_AUDIENCE="${CANTON_INSECURE_AUDIENCE:-https://canton.network.global}"
+export CANTON_INSECURE_SUB="${CANTON_INSECURE_SUB:-ledger-api-user}"
+
+if [[ -z "${CANTON_PROVIDER_TOKEN:-}" && -z "${CANTON_USER_TOKEN:-}" && -z "${CANTON_JWT_TOKEN:-}" ]]; then
+  if [[ "$CANTON_ALLOW_INSECURE_TOKEN" == "true" ]]; then
+    SHARED_TOKEN="$(generate_unsafe_hs256_token)"
+    export CANTON_PROVIDER_TOKEN="$SHARED_TOKEN"
+    export CANTON_USER_TOKEN="$SHARED_TOKEN"
+    ok "Generated unsafe HS256 token for localnet bootstrap"
+  else
+    warn "No token found. Set CANTON_PROVIDER_TOKEN / CANTON_USER_TOKEN / CANTON_JWT_TOKEN."
+  fi
+fi
+
+if "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/deploy/canton_network/bootstrap.py"; then
+  ok "Bootstrap complete (DAR upload + party map + seed)"
+else
+  warn "Bootstrap failed. Check deploy/canton_network/bootstrap.py output above."
+fi
+
+# ── Step 8: Print Status ───────────────────────────────
 
 echo ""
 echo -e "${GREEN}============================================${NC}"
-echo -e "${GREEN}  DevNet Validator is Running${NC}"
+echo -e "${GREEN}  Canton L1 Deployment is LIVE${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
-echo "Validator: $VALIDATOR_NAME"
-echo "Location:  $SPLICE_DIR"
+echo -e "${CYAN}Canton L1 Endpoints:${NC}"
+echo "  App Provider Ledger API:  localhost:${APP_PROVIDER_LEDGER_PORT}"
+echo "  App Provider JSON API:    localhost:${APP_PROVIDER_JSON_API_PORT}"
+echo "  App User Ledger API:      localhost:${APP_USER_LEDGER_PORT}"
+echo "  App User JSON API:        localhost:${APP_USER_JSON_API_PORT}"
+echo "  SV Ledger API:            localhost:${SV_LEDGER_PORT}"
 echo ""
-
-if [[ -n "$LEDGER_PORT" && -n "$JSON_API_PORT" ]]; then
-  echo "Endpoints:"
-  echo "  Ledger API: localhost:${LEDGER_PORT}"
-  echo "  JSON API:   localhost:${JSON_API_PORT}"
-  echo ""
-  echo "To seed demo contracts:"
-  echo "  JSON_API_URL=http://localhost:${JSON_API_PORT} python3 ${PROJECT_DIR}/deploy/scripts/seed_demo.py"
-  echo ""
-  echo "To start agents:"
-  echo "  DAML_LEDGER_URL=http://localhost:${LEDGER_PORT} SELLER_AGENT_PARTY=SellerAgent SELLER_PARTY=Seller python3 ${PROJECT_DIR}/agent/seller_agent.py &"
-  echo "  DAML_LEDGER_URL=http://localhost:${LEDGER_PORT} BUYER_AGENT_PARTY=BuyerAgent BUYER_PARTY=Buyer python3 ${PROJECT_DIR}/agent/buyer_agent.py &"
-  echo ""
-  echo "To start UI:"
-  echo "  cd ${PROJECT_DIR}/ui && VITE_JSON_API_URL=http://localhost:${JSON_API_PORT} npm run dev"
-else
-  echo "Check running containers to find ports:"
-  echo "  docker ps"
-  echo ""
-  echo "Then set endpoints and run:"
-  echo "  JSON_API_URL=http://localhost:<JSON_API_PORT> python3 ${PROJECT_DIR}/deploy/scripts/seed_demo.py"
-fi
-
+echo -e "${CYAN}Canton Network UIs:${NC}"
+echo "  Scan Explorer:            http://scan.localhost:4000"
+echo "  Super Validator:          http://sv.localhost:4000"
+echo "  App Provider Wallet:      http://wallet.localhost:3000"
+echo "  App User Wallet:          http://wallet.localhost:2000"
 echo ""
-echo "To run E2E tests against DevNet:"
-echo "  JSON_API_URL=http://localhost:${JSON_API_PORT:-7575} bash ${PROJECT_DIR}/test_lifecycle.sh"
+echo -e "${CYAN}To start agents:${NC}"
+echo "  make devnet-demo"
+echo "  # or:"
+echo "  bash deploy/canton_network/run_canton_network_demo.sh"
 echo ""
-echo "DevNet Explorer: https://scan.sv-1.dev.global.canton.network.sync.global"
+echo -e "${CYAN}To start UI:${NC}"
+echo "  cd ui && npm install"
+echo "  VITE_JSON_API_URL=http://localhost:8081 \\"
+echo "    VITE_MARKET_API_URL=http://localhost:8090 \\"
+echo "    VITE_JSON_API_USE_INSECURE_TOKEN=false npm run dev"
 echo ""
-echo "To stop: cd $SPLICE_DIR && ./stop.sh"
+echo -e "${CYAN}To run tests against Canton L1:${NC}"
+echo "  JSON_API_URL=http://localhost:8081 bash test_lifecycle.sh"
+echo ""
+echo -e "${CYAN}To stop Canton L1:${NC}"
+echo "  cd $LOCALNET_DIR && \\"
+echo "  docker compose --env-file compose.env --env-file env/common.env \\"
+echo "    -f compose.yaml -f resource-constraints.yaml \\"
+echo "    --profile sv --profile app-provider --profile app-user down -v"
+echo ""
+echo -e "${GREEN}Canton L1 is ready for judging!${NC}"

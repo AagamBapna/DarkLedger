@@ -14,11 +14,8 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
-
-import dazl
 
 from common import (
     load_market_data,
@@ -29,6 +26,7 @@ from common import (
     retry_create,
     retry_exercise,
 )
+from http_json_connection import HttpJsonConnection
 from llm_advisor import LLMAdvice
 
 
@@ -44,6 +42,9 @@ class AgentContext:
     poll_seconds: float
     counterparty_agent_party: str
     template_ids: dict[str, str] = field(default_factory=dict)
+    ledger_mode: str = os.getenv("DAML_LEDGER_MODE", "dazl")
+    http_json_url: str = os.getenv("DAML_HTTP_JSON_URL", "")
+    http_json_token: str = os.getenv("DAML_HTTP_JSON_TOKEN", os.getenv("JSON_API_TOKEN", ""))
 
     @staticmethod
     def _env(key: str, default: str) -> str:
@@ -69,11 +70,36 @@ class BaseAgent(ABC):
     async def start(self) -> None:
         """Connect to the ledger and launch all agent loops."""
         self.log.info(
-            "[boot] agent=%s ledger=%s owner=%s",
+            "[boot] agent=%s owner=%s mode=%s",
             self.ctx.agent_party,
-            self.ctx.ledger_url,
             self.ctx.owner_party,
+            self.ctx.ledger_mode,
         )
+        ledger_mode = (self.ctx.ledger_mode or "dazl").strip().lower()
+        use_http_json = bool(self.ctx.http_json_url.strip()) or ledger_mode in {
+            "http",
+            "http-json",
+            "json-api",
+            "v1-gateway",
+        }
+
+        if use_http_json:
+            endpoint = self.ctx.http_json_url.strip() or self.ctx.ledger_url
+            self.log.info("[boot] http-json endpoint=%s", endpoint)
+            async with HttpJsonConnection(
+                base_url=endpoint,
+                party=self.ctx.agent_party,
+                auth_token=self.ctx.http_json_token,
+            ) as conn:
+                self._conn = conn
+                self.log.info("[boot] connected, starting loops")
+                loops = self.get_loops()
+                await asyncio.gather(*[loop() for loop in loops])
+            return
+
+        self.log.info("[boot] dazl ledger=%s", self.ctx.ledger_url)
+        import dazl
+
         async with dazl.connect(
             url=self.ctx.ledger_url,
             act_as=[self.ctx.agent_party],

@@ -107,9 +107,6 @@ template DiscoveryInterest
     signatory postingAgent
     observer owner, issuer, discoverableBy
 
-    key (postingAgent, instrument, side) : (Party, Text, Side)
-    maintainer key._1
-
     choice CancelInterest : ()
       controller postingAgent
       do

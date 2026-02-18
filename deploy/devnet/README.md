@@ -1,16 +1,33 @@
-# Canton L1 DevNet Deployment
+# Canton L1 Deployment (Splice LocalNet)
 
-Deploy Agentic Shadow-Cap to the real Canton L1 DevNet (Global Synchronizer).
+Deploy Agentic Shadow-Cap to a full Canton L1 network using Splice LocalNet.
 
-## Architecture Difference
+## What is Splice LocalNet?
 
-| | Local (make demo) | DevNet (make devnet) |
+Splice LocalNet is the official local deployment of the Canton Network topology,
+provided by the `splice-node` release from `digital-asset/decentralized-canton-sync`.
+
+It runs the **same Canton protocol stack** used on the real Global Synchronizer,
+including:
+- **Super Validator (SV)** — operates the Global Synchronizer
+- **App Provider** — participant + validator (hosts Seller / SellerAgent / Company)
+- **App User** — participant + validator (hosts Buyer / BuyerAgent)
+- **PostgreSQL** — persistent state
+- **NGINX gateway** — routes to wallet/scan/sv UIs
+
+This is the [recommended deployment target](https://docs.sync.global/app_dev/testing/localnet.html)
+for Canton Network development and hackathon submissions.
+
+## Architecture
+
+| | Local (make demo) | Canton L1 (make devnet) |
 |---|---|---|
-| Canton nodes | 3 local Docker containers | 1 splice-node validator on L1 |
-| Domain | Local domain container | Global Synchronizer |
-| Privacy | Protocol-enforced (same) | Protocol-enforced (same) |
-| Persistence | In-memory (resets on stop) | DevNet state (persistent) |
-| Network | localhost only | Public Canton L1 DevNet |
+| Canton nodes | 3 local Docker containers | Splice LocalNet (SV + 2 participants) |
+| Domain | Local domain container | Global Synchronizer (SV-managed) |
+| Privacy | Protocol-enforced | Protocol-enforced (same protocol) |
+| Persistence | In-memory (resets) | PostgreSQL (persistent) |
+| Network UIs | None | Scan Explorer, SV UI, Wallet UIs |
+| Canton version | Custom docker-compose | splice-node v0.5.10 |
 
 ## Quick Start (One Command)
 
@@ -19,172 +36,169 @@ make devnet
 ```
 
 This will:
-1. Download splice-node v0.5.10
-2. Get an onboarding secret from the DevNet Super Validator
-3. Start a Canton validator connected to the Global Synchronizer
-4. Upload the Shadow-Cap DAR
-5. Print endpoints for agents + UI
+1. Download splice-node v0.5.10 (~500MB)
+2. Start Splice LocalNet (SV + App Provider + App User)
+3. Wait for all Canton nodes to become healthy
+4. Bootstrap via JSON Ledger API v2 (DAR upload + party map + seed)
+5. Print endpoints for gateway + agents + UI
+
+## Requirements
+
+- **Docker Desktop** running with **8GB+ memory** allocated
+- **Daml SDK 3.4.x**
+- **Python 3.10+** (for agents)
+- **Node.js 18+** (for React UI)
+- **~2GB disk space** for Docker images
+
+## Port Map
+
+### Canton L1 Endpoints
+
+| Service | Port | Purpose |
+|---|---|---|
+| App Provider Ledger API | 3901 | gRPC ledger (Seller-side) |
+| App Provider JSON API | 3975 | HTTP JSON API (Seller-side) |
+| App User Ledger API | 2901 | gRPC ledger (Buyer-side) |
+| App User JSON API | 2975 | HTTP JSON API (Buyer-side) |
+| SV Ledger API | 4901 | gRPC ledger (Compliance) |
+
+### Canton Network UIs
+
+| UI | URL | Purpose |
+|---|---|---|
+| Scan Explorer | http://scan.localhost:4000 | Transaction explorer |
+| Super Validator | http://sv.localhost:4000 | SV management |
+| App Provider Wallet | http://wallet.localhost:3000 | Provider wallet |
+| App User Wallet | http://wallet.localhost:2000 | User wallet |
 
 ## Manual Step-by-Step
 
-### 1. Prerequisites
-
-- Docker Desktop running
-- Daml SDK 2.10.x
-- Python 3.10+
-- Internet access (no VPN needed for public DevNet)
-
-### 2. Download splice-node
+### 1. Download splice-node
 
 ```bash
 VERSION="0.5.10"
-MIGRATION_ID="1"
 mkdir -p ~/.canton/${VERSION}
 cd ~/.canton/${VERSION}
 
-wget https://github.com/digital-asset/decentralized-canton-sync/releases/download/v${VERSION}/${VERSION}_splice-node.tar.gz
+curl -L -o ${VERSION}_splice-node.tar.gz \
+  https://github.com/digital-asset/decentralized-canton-sync/releases/download/v${VERSION}/${VERSION}_splice-node.tar.gz
+
 tar xzf ${VERSION}_splice-node.tar.gz
-cd splice-node/docker-compose/validator
 ```
 
-### 3. Get onboarding secret
+### 2. Start LocalNet
 
 ```bash
-SECRET=$(curl -X POST https://sv.sv-1.dev.global.canton.network.sync.global/api/sv/v0/devnet/onboard/validator/prepare)
-```
-
-Secret is valid for 1 hour. If sv-1 is unavailable, use sv-2.
-
-### 4. Start validator
-
-```bash
-# Enable development auth mode
-echo "COMPOSE_FILE=compose.yaml:compose-disable-auth.yaml" >> .env
-echo 'AUTH_URL=https://unsafe.auth' >> .env
-
+export LOCALNET_DIR=$PWD/splice-node/docker-compose/localnet
 export IMAGE_TAG=0.5.10
 
-./start.sh \
-  -s "https://sv.sv-1.dev.global.canton.network.sync.global" \
-  -o "${SECRET}" \
-  -p "shadowcap-hackathon" \
-  -m "1" \
-  -w
+docker compose \
+  --env-file $LOCALNET_DIR/compose.env \
+  --env-file $LOCALNET_DIR/env/common.env \
+  -f $LOCALNET_DIR/compose.yaml \
+  -f $LOCALNET_DIR/resource-constraints.yaml \
+  --profile sv \
+  --profile app-provider \
+  --profile app-user \
+  up -d
 ```
 
-Wait 2-5 minutes for the validator to become healthy:
-```bash
-docker ps --format '{{.Names}}: {{.Status}}' | grep splice
-```
+Wait 3-5 minutes for all nodes to become healthy.
 
-### 5. Find your endpoints
+### 3. Build and bootstrap on participant APIs
 
 ```bash
-# Find ledger API and JSON API ports
-docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep splice
-```
-
-Look for ports mapped to 5001 (ledger API) and 7575 (JSON API).
-
-### 6. Build and upload DAR
-
-```bash
-cd ~/canton  # back to project root
+cd ~/canton
 make build
-daml ledger upload-dar daml/.daml/dist/agentic-shadow-cap-0.1.0.dar --host localhost --port <LEDGER_PORT>
+make canton-network-bootstrap
 ```
 
-### 7. Seed demo contracts
+### 4. Start gateway + agents
 
 ```bash
-JSON_API_URL=http://localhost:<JSON_API_PORT> python3 deploy/scripts/seed_demo.py
+make canton-network-demo
 ```
 
-### 8. Start agents
+### 5. Start UI
 
 ```bash
-# Seller agent
-DAML_LEDGER_URL=http://localhost:<LEDGER_PORT> \
-  SELLER_AGENT_PARTY=SellerAgent SELLER_PARTY=Seller \
-  AGENT_CONTROL_PATH=agent/agent_controls.json \
-  MARKET_FEED_PATH=agent/mock_market_feed.json \
-  python3 agent/seller_agent.py &
-
-# Buyer agent
-DAML_LEDGER_URL=http://localhost:<LEDGER_PORT> \
-  BUYER_AGENT_PARTY=BuyerAgent BUYER_PARTY=Buyer \
-  TARGET_INSTRUMENT=COMPANY-SERIES-A \
-  AGENT_CONTROL_PATH=agent/agent_controls.json \
-  MARKET_FEED_PATH=agent/mock_market_feed.json \
-  python3 agent/buyer_agent.py &
-
-# Market API
-MARKET_FEED_PATH=agent/mock_market_feed.json \
-  AGENT_CONTROL_PATH=agent/agent_controls.json \
-  uvicorn agent.market_api:app --host 0.0.0.0 --port 8090 &
-```
-
-### 9. Start UI
-
-```bash
-cd ui
-VITE_JSON_API_URL=http://localhost:<JSON_API_PORT> \
+cd ui && npm install
+VITE_JSON_API_URL=http://localhost:8081 \
   VITE_MARKET_API_URL=http://localhost:8090 \
+  VITE_JSON_API_USE_INSECURE_TOKEN=false \
   npm run dev
 ```
 
-### 10. Run E2E tests against DevNet
+## Verify Deployment
 
+### Check Canton nodes
 ```bash
-JSON_API_URL=http://localhost:<JSON_API_PORT> bash test_lifecycle.sh
+docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E "(canton|splice|localnet)"
 ```
 
-## Verify on DevNet Explorer
+### Run tests
+```bash
+JSON_API_URL=http://localhost:8081 bash test_lifecycle.sh
+```
 
-After running the lifecycle, check:
-- https://scan.sv-1.dev.global.canton.network.sync.global
-
-Your transactions will appear on the Global Synchronizer.
+### Check Scan Explorer
+Open http://scan.localhost:4000 — your transactions will appear in the
+Global Synchronizer explorer.
 
 ## Submission Checklist
 
-- [ ] Validator running and healthy on DevNet
-- [ ] DAR uploaded to DevNet participant
-- [ ] Demo contracts seeded (AssetHolding, CashHolding, TradeIntent)
-- [ ] `test_lifecycle.sh` passes against DevNet endpoints
+- [ ] Canton L1 (LocalNet) running and healthy
+- [ ] `deploy/canton_network/bootstrap.py` completed successfully
+- [ ] `deploy/canton_network/party_map.json` generated
+- [ ] Gateway running on `localhost:8081`
+- [ ] Agents running and showing AI reasoning in logs
 - [ ] UI accessible and showing party-specific views
+- [ ] Scan Explorer showing Canton transactions
 - [ ] Screenshot/video of:
   - Seller perspective showing private TradeIntent
   - Public perspective showing ZERO contracts
   - Company (compliance) approving and settling
   - Agent logs with AI reasoning
-- [ ] DevNet explorer showing transactions
+  - Scan Explorer transaction view
 
 ## Troubleshooting
 
 ### "Cannot connect to Docker daemon"
 Start Docker Desktop from Applications.
 
-### Onboarding secret fails
-Try sv-2 instead of sv-1:
+### Nodes not becoming healthy
 ```bash
-SECRET=$(curl -X POST https://sv.sv-2.dev.global.canton.network.sync.global/api/sv/v0/devnet/onboard/validator/prepare)
-```
+# Check container status
+docker ps -a
 
-### Validator not becoming healthy
-```bash
-docker compose logs -f validator  # check for errors
+# View logs for a specific container
+docker logs <container-name> --tail 100
 ```
 
 ### DAR upload fails
-Ensure the ledger API port is correct:
+Ensure the node is fully started:
 ```bash
-docker ps | grep 5001  # find the mapped port
+# Check if port is open
+nc -z localhost 3901 && echo "Port open" || echo "Port closed"
 ```
+
+### Memory issues
+Splice LocalNet requires ~6GB of RAM. In Docker Desktop:
+Settings → Resources → Memory → Set to 8GB+
 
 ## Stop Everything
 
 ```bash
-cd ~/.canton/0.5.10/splice-node/docker-compose/validator
-./stop.sh
+export LOCALNET_DIR=~/.canton/0.5.10/splice-node/docker-compose/localnet
+export IMAGE_TAG=0.5.10
+
+docker compose \
+  --env-file $LOCALNET_DIR/compose.env \
+  --env-file $LOCALNET_DIR/env/common.env \
+  -f $LOCALNET_DIR/compose.yaml \
+  -f $LOCALNET_DIR/resource-constraints.yaml \
+  --profile sv \
+  --profile app-provider \
+  --profile app-user \
+  down -v
 ```

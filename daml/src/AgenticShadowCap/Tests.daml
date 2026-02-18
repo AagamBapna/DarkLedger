@@ -9,11 +9,11 @@ type Parties = (Party, Party, Party, Party, Party)
 
 setupParties : Script Parties
 setupParties = do
-  seller <- allocatePartyWithHint "Seller" (PartyIdHint "seller")
-  sellerAgent <- allocatePartyWithHint "SellerAgent" (PartyIdHint "seller-agent")
-  buyer <- allocatePartyWithHint "Buyer" (PartyIdHint "buyer")
-  buyerAgent <- allocatePartyWithHint "BuyerAgent" (PartyIdHint "buyer-agent")
-  issuer <- allocatePartyWithHint "Company" (PartyIdHint "company")
+  seller <- allocatePartyWithHint "Seller" (PartyIdHint "Seller")
+  sellerAgent <- allocatePartyWithHint "SellerAgent" (PartyIdHint "SellerAgent")
+  buyer <- allocatePartyWithHint "Buyer" (PartyIdHint "Buyer")
+  buyerAgent <- allocatePartyWithHint "BuyerAgent" (PartyIdHint "BuyerAgent")
+  issuer <- allocatePartyWithHint "Company" (PartyIdHint "Company")
   pure (seller, sellerAgent, buyer, buyerAgent, issuer)
 
 createMatchedNegotiation : Party -> Party -> Party -> Party -> Party -> Text -> Script (ContractId PrivateNegotiation)
@@ -174,7 +174,7 @@ testTradeIntentInvisibleToBuyer = script do
 testNegotiationInvisibleToOutsider : Script ()
 testNegotiationInvisibleToOutsider = script do
   (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
-  outsider <- allocatePartyWithHint "Outsider" (PartyIdHint "outsider")
+  outsider <- allocatePartyWithHint "Outsider" (PartyIdHint "Outsider")
 
   _ <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
 
@@ -193,7 +193,7 @@ testNegotiationInvisibleToOutsider = script do
 testDiscoverySignalScopedVisibility : Script ()
 testDiscoverySignalScopedVisibility = script do
   (seller, sellerAgent, _buyer, buyerAgent, issuer) <- setupParties
-  outsider <- allocatePartyWithHint "Outsider" (PartyIdHint "discovery-outsider")
+  outsider <- allocatePartyWithHint "Outsider" (PartyIdHint "Outsider")
 
   _ <- submit sellerAgent do
     createCmd DiscoveryInterest with

@@ -1,4 +1,4 @@
-.PHONY: build up down parties upload seed controls-reset agents agents-stop ui ui-stop demo clean status test test-daml test-e2e test-lifecycle devnet demo-web-venv demo-web-backend
+.PHONY: build up down parties upload seed controls-reset agents agents-stop ui ui-stop demo clean status test test-daml test-e2e test-lifecycle devnet devnet-demo devnet-down canton-network-bootstrap canton-network-demo demo-web-venv demo-web-backend
 
 DAML_DIR   := daml
 DEPLOY_DIR := deploy
@@ -148,8 +148,28 @@ test: test-daml
 	@echo "==> Unit tests complete. For integration tests run: make test-e2e (with make demo running)"
 
 devnet:
-	@echo "==> Setting up Canton L1 DevNet validator..."
+	@echo "==> Setting up Canton L1 (Splice LocalNet)..."
 	bash $(DEPLOY_DIR)/devnet/setup_devnet_validator.sh
+
+devnet-demo:
+	@echo "==> Starting agents + UI against Canton L1..."
+	bash $(DEPLOY_DIR)/devnet/run_devnet_demo.sh
+
+devnet-down:
+	@echo "==> Stopping Canton L1 (Splice LocalNet)..."
+	@LOCALNET_DIR="$${HOME}/.canton/0.5.10/splice-node/docker-compose/localnet" && \
+	 IMAGE_TAG=0.5.10 && \
+	 export LOCALNET_DIR IMAGE_TAG && \
+	 docker compose \
+	   --env-file "$$LOCALNET_DIR/compose.env" \
+	   --env-file "$$LOCALNET_DIR/env/common.env" \
+	   -f "$$LOCALNET_DIR/compose.yaml" \
+	   -f "$$LOCALNET_DIR/resource-constraints.yaml" \
+	   --profile sv \
+	   --profile app-provider \
+	   --profile app-user \
+	   down -v
+	@echo "==> Canton L1 stopped."
 
 # ─── Public Web Demo (no Docker) ───────────────────────────────────────────
 demo-web-venv:
@@ -166,6 +186,18 @@ demo-web-backend:
 	fi
 	@echo "==> Starting no-Docker public demo backend..."
 	.venv/bin/python deploy/public_demo/run_backend.py
+
+canton-network-bootstrap: build
+	@echo "==> Bootstrapping Canton Network participants..."
+	@if [ ! -x .venv/bin/python ]; then \
+		echo "==> Missing .venv. Run: make demo-web-venv"; \
+		exit 1; \
+	fi
+	.venv/bin/python deploy/canton_network/bootstrap.py
+
+canton-network-demo:
+	@echo "==> Starting full Canton Network demo stack (gateway + agents + market API)..."
+	bash deploy/canton_network/run_canton_network_demo.sh
 
 # ─── Status ──────────────────────────────────────────────────────────────────
 status:
