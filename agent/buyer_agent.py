@@ -13,194 +13,183 @@ from __future__ import annotations
 import asyncio
 import os
 import logging
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
-import dazl
-
+from base_agent import BaseAgent, AgentContext
 from llm_advisor import get_pricing_advice, get_negotiation_advice
 from common import (
     optional_decimal,
     parse_side,
     parse_party_list,
     make_side,
-    load_market_data,
-    load_agent_controls,
-    retry_exercise,
-    retry_create,
-    log_decision,
-    query_active,
-    query_filtered,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-log = logging.getLogger("buyer_agent")
 
 ABSOLUTE_CEILING_RATIO = Decimal("1.40")
 
 
-@dataclass
-class AgentConfig:
-    ledger_url: str
-    agent_party: str
-    buyer_party: str
-    target_instrument: str
-    discovery_template_id: str
-    negotiation_template_id: str
-    feed_path: Path
-    poll_seconds: float
-    max_price: Decimal
-    default_qty: Decimal
-    discovery_strategy_tag: str
-    counterparty_agent_party: str
-    control_path: Path
-
-    @staticmethod
-    def from_env() -> "AgentConfig":
-        return AgentConfig(
-            ledger_url=os.getenv("DAML_LEDGER_URL", "http://localhost:5021"),
-            agent_party=os.getenv("BUYER_AGENT_PARTY", "BuyerAgent"),
-            buyer_party=os.getenv("BUYER_PARTY", "Buyer"),
-            target_instrument=os.getenv("TARGET_INSTRUMENT", "COMPANY-SERIES-A"),
-            discovery_template_id=os.getenv("DISCOVERY_TEMPLATE", "AgenticShadowCap.Market:DiscoveryInterest"),
-            negotiation_template_id=os.getenv("NEGOTIATION_TEMPLATE", "AgenticShadowCap.Market:PrivateNegotiation"),
-            feed_path=Path(os.getenv("MARKET_FEED_PATH", "./agent/mock_market_feed.json")),
-            poll_seconds=float(os.getenv("AGENT_POLL_SECONDS", "5")),
-            max_price=Decimal(os.getenv("BUYER_MAX_PRICE", "110.00")),
-            default_qty=Decimal(os.getenv("BUYER_DEFAULT_QTY", "1000.00")),
-            discovery_strategy_tag=os.getenv("BUYER_DISCOVERY_STRATEGY", "BUY_WHISPER"),
-            counterparty_agent_party=os.getenv("BUYER_COUNTERPARTY_AGENT", "SellerAgent"),
-            control_path=Path(os.getenv("AGENT_CONTROL_PATH", "./agent/agent_controls.json")),
-        )
+def build_context() -> AgentContext:
+    return AgentContext(
+        ledger_url=os.getenv("DAML_LEDGER_URL", "http://localhost:5021"),
+        agent_party=os.getenv("BUYER_AGENT_PARTY", "BuyerAgent"),
+        owner_party=os.getenv("BUYER_PARTY", "Buyer"),
+        feed_path=Path(os.getenv("MARKET_FEED_PATH", "./agent/mock_market_feed.json")),
+        control_path=Path(os.getenv("AGENT_CONTROL_PATH", "./agent/agent_controls.json")),
+        poll_seconds=float(os.getenv("AGENT_POLL_SECONDS", "5")),
+        counterparty_agent_party=os.getenv("BUYER_COUNTERPARTY_AGENT", "SellerAgent"),
+        template_ids={
+            "discovery": os.getenv("DISCOVERY_TEMPLATE", "AgenticShadowCap.Market:DiscoveryInterest"),
+            "negotiation": os.getenv("NEGOTIATION_TEMPLATE", "AgenticShadowCap.Market:PrivateNegotiation"),
+        },
+    )
 
 
-async def discovery_loop(conn: Any, config: AgentConfig) -> None:
-    while True:
-        discoveries = await query_active(conn, config.discovery_template_id)
+class BuyerAgent(BaseAgent):
+    """
+    Autonomous buyer-side agent.
 
-        has_sell_signal = False
-        own_buy_signal = False
-        matched_sell_signal: dict[str, Any] | None = None
+    Monitors the ledger for sell-side DiscoveryInterest signals,
+    posts matching buy signals, and negotiates prices within a
+    configurable maxPrice ceiling.
+    """
 
-        for payload in discoveries.values():
-            side = parse_side(payload.get("side"))
-            instrument = payload.get("instrument", "")
-            posting_agent = payload.get("postingAgent", "")
-            discoverable_by = parse_party_list(payload.get("discoverableBy"))
+    TARGET_INSTRUMENT = os.getenv("TARGET_INSTRUMENT", "COMPANY-SERIES-A")
+    MAX_PRICE = Decimal(os.getenv("BUYER_MAX_PRICE", "110.00"))
+    DEFAULT_QTY = Decimal(os.getenv("BUYER_DEFAULT_QTY", "1000.00"))
+    DISCOVERY_STRATEGY_TAG = os.getenv("BUYER_DISCOVERY_STRATEGY", "BUY_WHISPER")
 
-            if (
-                side == "Buy"
-                and instrument == config.target_instrument
-                and posting_agent == config.agent_party
-            ):
-                own_buy_signal = True
+    def __init__(self, context: AgentContext) -> None:
+        super().__init__(context)
+        self._negotiation_processed: set[object] = set()
+        self._original_max = self.MAX_PRICE
 
-            if (
-                side == "Sell"
-                and instrument == config.target_instrument
-                and posting_agent != config.agent_party
-                and (
-                    not discoverable_by
-                    or config.agent_party in discoverable_by
+    def get_loops(self) -> list:
+        return [self._discovery_loop, self._negotiation_loop]
+
+    # ── Discovery Loop ──────────────────────────────────────────
+
+    async def _discovery_loop(self) -> None:
+        while True:
+            tid = self.ctx.template_ids
+            discoveries = await self.query(tid["discovery"])
+
+            has_sell_signal = False
+            own_buy_signal = False
+            matched_sell_signal: dict | None = None
+
+            for payload in discoveries.values():
+                side = parse_side(payload.get("side"))
+                instrument = payload.get("instrument", "")
+                posting_agent = payload.get("postingAgent", "")
+                discoverable_by = parse_party_list(payload.get("discoverableBy"))
+
+                if (
+                    side == "Buy"
+                    and instrument == self.TARGET_INSTRUMENT
+                    and posting_agent == self.ctx.agent_party
+                ):
+                    own_buy_signal = True
+
+                if (
+                    side == "Sell"
+                    and instrument == self.TARGET_INSTRUMENT
+                    and posting_agent != self.ctx.agent_party
+                    and (
+                        not discoverable_by
+                        or self.ctx.agent_party in discoverable_by
+                    )
+                ):
+                    has_sell_signal = True
+                    matched_sell_signal = payload
+                    break
+
+            if has_sell_signal and not own_buy_signal:
+                issuer = (matched_sell_signal or {}).get("issuer", "")
+                counterparty_agent = (matched_sell_signal or {}).get("postingAgent", "") or self.ctx.counterparty_agent_party
+                discoverable_by = [p for p in [counterparty_agent] if p]
+                if issuer:
+                    try:
+                        await self.create(tid["discovery"], {
+                            "issuer": issuer,
+                            "owner": self.ctx.owner_party,
+                            "postingAgent": self.ctx.agent_party,
+                            "discoverableBy": discoverable_by,
+                            "instrument": self.TARGET_INSTRUMENT,
+                            "side": make_side("Buy"),
+                            "strategyTag": self.DISCOVERY_STRATEGY_TAG,
+                        })
+                        self.log.info("[agent] posted buy DiscoveryInterest for %s", self.TARGET_INSTRUMENT)
+                    except Exception as ex:
+                        self.log.warning("[agent] DiscoveryInterest failed: %s", ex)
+
+            await self.sleep()
+
+    # ── Negotiation Loop ────────────────────────────────────────
+
+    async def _negotiation_loop(self) -> None:
+        while True:
+            market_data = self.market_data()
+            controls = self.agent_controls()
+            buyer_auto_reprice = bool(controls.get("buyer_auto_reprice", True))
+            tid = self.ctx.template_ids
+            negotiations = await self.query_by_field(tid["negotiation"], "buyerAgent", self.ctx.agent_party)
+
+            # Dynamically adjust max price based on market conditions
+            if buyer_auto_reprice:
+                advice = get_pricing_advice(self.TARGET_INSTRUMENT, self.MAX_PRICE, market_data, "buyer")
+                adjusted_max = advice.recommended_price
+            else:
+                adjusted_max = self.MAX_PRICE
+
+            absolute_ceiling = self._original_max * ABSOLUTE_CEILING_RATIO
+            if adjusted_max > absolute_ceiling:
+                self.log.warning(
+                    "[agent] clamping adjusted max %s -> ceiling %s (140%% of original %s)",
+                    adjusted_max, absolute_ceiling, self._original_max,
                 )
-            ):
-                has_sell_signal = True
-                matched_sell_signal = payload
-                break
+                adjusted_max = absolute_ceiling
 
-        if has_sell_signal and not own_buy_signal:
-            issuer = (matched_sell_signal or {}).get("issuer", "")
-            counterparty_agent = (matched_sell_signal or {}).get("postingAgent", "") or config.counterparty_agent_party
-            discoverable_by = [p for p in [counterparty_agent] if p]
-            if issuer:
+            for cid, payload in list(negotiations.items()):
+                if cid in self._negotiation_processed:
+                    continue
+
+                proposed_qty = optional_decimal(payload.get("proposedQty"))
+                proposed_price = optional_decimal(payload.get("proposedUnitPrice"))
+                seller_accepted = bool(payload.get("sellerAccepted", False))
+                buyer_accepted = bool(payload.get("buyerAccepted", False))
+                instrument = payload.get("instrument", "")
+
+                if not seller_accepted or buyer_accepted:
+                    continue
+                if proposed_qty is None or proposed_price is None:
+                    continue
+
                 try:
-                    await retry_create(conn, config.discovery_template_id, {
-                        "issuer": issuer,
-                        "owner": config.buyer_party,
-                        "postingAgent": config.agent_party,
-                        "discoverableBy": discoverable_by,
-                        "instrument": config.target_instrument,
-                        "side": make_side("Buy"),
-                        "strategyTag": config.discovery_strategy_tag,
-                    })
-                    log.info("[agent] posted buy DiscoveryInterest for %s", config.target_instrument)
+                    neg_advice = get_negotiation_advice(instrument, proposed_price, adjusted_max, market_data, "buyer")
+                    await self.log_agent_decision(instrument, neg_advice, market_data)
+
+                    if neg_advice.action == "accept":
+                        self.log.info("[negotiation] accepting at %s (reason: %s)", proposed_price, neg_advice.reasoning[:60])
+                        await self.exercise(cid, "AcceptByBuyer", {})
+                    else:
+                        self.log.info("[negotiation] countering at %s (reason: %s)", adjusted_max, neg_advice.reasoning[:60])
+                        await self.exercise(cid, "SubmitBuyerTerms", {
+                            "qty": str(proposed_qty),
+                            "unitPrice": str(adjusted_max),
+                        })
+                    self._negotiation_processed.add(cid)
                 except Exception as ex:
-                    log.warning("[agent] DiscoveryInterest failed: %s", ex)
+                    self.log.error("[negotiation] failed: %s", ex)
 
-        await asyncio.sleep(config.poll_seconds)
-
-
-async def negotiation_loop(conn: Any, config: AgentConfig) -> None:
-    processed: set[Any] = set()
-    original_max = config.max_price
-
-    while True:
-        market_data = load_market_data(config.feed_path)
-        controls = load_agent_controls(config.control_path)
-        buyer_auto_reprice = bool(controls.get("buyer_auto_reprice", True))
-        negotiations = await query_filtered(conn, config.negotiation_template_id, "buyerAgent", config.agent_party)
-
-        if buyer_auto_reprice:
-            advice = get_pricing_advice(config.target_instrument, config.max_price, market_data, "buyer")
-            adjusted_max = advice.recommended_price
-        else:
-            adjusted_max = config.max_price
-
-        absolute_ceiling = original_max * ABSOLUTE_CEILING_RATIO
-        if adjusted_max > absolute_ceiling:
-            log.warning(
-                "[agent] clamping adjusted max %s -> ceiling %s (140%% of original %s)",
-                adjusted_max, absolute_ceiling, original_max,
-            )
-            adjusted_max = absolute_ceiling
-
-        for cid, payload in list(negotiations.items()):
-            if cid in processed:
-                continue
-
-            proposed_qty = optional_decimal(payload.get("proposedQty"))
-            proposed_price = optional_decimal(payload.get("proposedUnitPrice"))
-            seller_accepted = bool(payload.get("sellerAccepted", False))
-            buyer_accepted = bool(payload.get("buyerAccepted", False))
-            instrument = payload.get("instrument", "")
-
-            if not seller_accepted or buyer_accepted:
-                continue
-            if proposed_qty is None or proposed_price is None:
-                continue
-
-            try:
-                neg_advice = get_negotiation_advice(instrument, proposed_price, adjusted_max, market_data, "buyer")
-                await log_decision(conn, config.agent_party, config.buyer_party, instrument, neg_advice, market_data)
-
-                if neg_advice.action == "accept":
-                    log.info("[negotiation] accepting at %s (reason: %s)", proposed_price, neg_advice.reasoning[:60])
-                    await retry_exercise(conn, cid, "AcceptByBuyer", {})
-                else:
-                    log.info("[negotiation] countering at %s (reason: %s)", adjusted_max, neg_advice.reasoning[:60])
-                    await retry_exercise(conn, cid, "SubmitBuyerTerms", {
-                        "qty": str(proposed_qty),
-                        "unitPrice": str(adjusted_max),
-                    })
-                processed.add(cid)
-            except Exception as ex:
-                log.error("[negotiation] failed: %s", ex)
-
-        await asyncio.sleep(config.poll_seconds)
+            await self.sleep()
 
 
 async def main() -> None:
-    config = AgentConfig.from_env()
-    log.info("[boot] buyer agent=%s ledger=%s target=%s", config.agent_party, config.ledger_url, config.target_instrument)
-
-    async with dazl.connect(url=config.ledger_url, act_as=[config.agent_party], read_as=[config.agent_party]) as conn:
-        log.info("[boot] connected, starting loops")
-        await asyncio.gather(
-            discovery_loop(conn, config),
-            negotiation_loop(conn, config),
-        )
+    ctx = build_context()
+    agent = BuyerAgent(ctx)
+    await agent.start()
 
 
 if __name__ == "__main__":

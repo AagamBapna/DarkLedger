@@ -36,6 +36,9 @@ CASH_AMOUNT = Decimal(os.getenv("DEMO_CASH_AMOUNT", "500000.0"))
 INTENT_QTY = Decimal(os.getenv("DEMO_INTENT_QTY", "1500.0"))
 INTENT_MIN_PRICE = Decimal(os.getenv("DEMO_INTENT_MIN_PRICE", "95.0"))
 
+_PARTY_ID_CACHE: dict[str, str] = {}
+_PARTIES_RESOLVED = False
+
 
 def b64url(value: str) -> str:
     raw = base64.urlsafe_b64encode(value.encode("utf-8")).decode("utf-8")
@@ -55,11 +58,29 @@ def insecure_token_for_party(party: str) -> str:
     return f"{b64url(json.dumps(header))}.{b64url(json.dumps(payload))}."
 
 
+def insecure_admin_token() -> str:
+    header = {"alg": "none", "typ": "JWT"}
+    payload = {
+        "https://daml.com/ledger-api": {
+            "ledgerId": "sandbox",
+            "applicationId": "shadow-cap-seed",
+            "admin": True,
+            "actAs": [],
+            "readAs": [],
+        }
+    }
+    return f"{b64url(json.dumps(header))}.{b64url(json.dumps(payload))}."
+
+
+def party_id(party: str) -> str:
+    return _PARTY_ID_CACHE.get(party, party)
+
+
 def auth_header_for_party(party: str) -> str | None:
     if STATIC_TOKEN:
         return STATIC_TOKEN
     if USE_INSECURE_TOKEN:
-        return insecure_token_for_party(party)
+        return insecure_token_for_party(party_id(party))
     return None
 
 
@@ -70,13 +91,14 @@ def template_id(name: str) -> str:
 
 def post_json(party: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
     token = auth_header_for_party(party)
+    resolved_party = party_id(party)
     req = urllib.request.Request(
         f"{JSON_API_URL}{path}",
         data=json.dumps(body).encode("utf-8"),
         method="POST",
     )
     req.add_header("Content-Type", "application/json")
-    req.add_header("X-Ledger-Party", party)
+    req.add_header("X-Ledger-Party", resolved_party)
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
@@ -85,7 +107,41 @@ def post_json(party: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
             return json.loads(data)
     except urllib.error.HTTPError as ex:
         payload = ex.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{path} failed ({ex.code}) for {party}: {payload}") from ex
+        raise RuntimeError(f"{path} failed ({ex.code}) for {resolved_party}: {payload}") from ex
+
+
+def resolve_party_ids() -> None:
+    global _PARTIES_RESOLVED
+    if _PARTIES_RESOLVED:
+        return
+
+    token = STATIC_TOKEN or insecure_admin_token()
+    req = urllib.request.Request(f"{JSON_API_URL}/v1/parties", method="GET")
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        _PARTY_ID_CACHE.update({
+            ISSUER: ISSUER,
+            SELLER: SELLER,
+            SELLER_AGENT: SELLER_AGENT,
+            BUYER: BUYER,
+        })
+        _PARTIES_RESOLVED = True
+        return
+
+    for item in data.get("result", []):
+        identifier = item.get("identifier")
+        display_name = item.get("displayName")
+        if isinstance(identifier, str) and identifier:
+            _PARTY_ID_CACHE[identifier] = identifier
+            if isinstance(display_name, str) and display_name:
+                _PARTY_ID_CACHE[display_name] = identifier
+
+    for fallback in (ISSUER, SELLER, SELLER_AGENT, BUYER):
+        _PARTY_ID_CACHE.setdefault(fallback, fallback)
+    _PARTIES_RESOLVED = True
 
 
 def query_template(party: str, tid: str) -> list[dict[str, Any]]:
@@ -103,21 +159,23 @@ def decimal_of(value: Any) -> Decimal:
 
 
 def ensure_asset_holding() -> None:
+    issuer = party_id(ISSUER)
+    seller = party_id(SELLER)
     tid = template_id("AssetHolding")
-    existing = query_template(ISSUER, tid)
+    existing = query_template(issuer, tid)
     for item in existing:
         payload = item.get("payload", {})
         if (
-            payload.get("owner") == SELLER
+            payload.get("owner") == seller
             and payload.get("instrument") == INSTRUMENT
             and decimal_of(payload.get("quantity", "0")) >= ASSET_QTY
         ):
-            print(f"[seed] asset holding already present for {SELLER} ({INSTRUMENT})")
+            print(f"[seed] asset holding already present for {seller} ({INSTRUMENT})")
             return
 
-    cid = create_contract(ISSUER, tid, {
-        "owner": SELLER,
-        "issuer": ISSUER,
+    cid = create_contract(issuer, tid, {
+        "owner": seller,
+        "issuer": issuer,
         "instrument": INSTRUMENT,
         "quantity": str(ASSET_QTY),
     })
@@ -125,21 +183,23 @@ def ensure_asset_holding() -> None:
 
 
 def ensure_cash_holding() -> None:
+    issuer = party_id(ISSUER)
+    buyer = party_id(BUYER)
     tid = template_id("CashHolding")
-    existing = query_template(ISSUER, tid)
+    existing = query_template(issuer, tid)
     for item in existing:
         payload = item.get("payload", {})
         if (
-            payload.get("owner") == BUYER
+            payload.get("owner") == buyer
             and payload.get("currency") == CURRENCY
             and decimal_of(payload.get("amount", "0")) >= CASH_AMOUNT
         ):
-            print(f"[seed] cash holding already present for {BUYER} ({CURRENCY})")
+            print(f"[seed] cash holding already present for {buyer} ({CURRENCY})")
             return
 
-    cid = create_contract(ISSUER, tid, {
-        "owner": BUYER,
-        "issuer": ISSUER,
+    cid = create_contract(issuer, tid, {
+        "owner": buyer,
+        "issuer": issuer,
         "currency": CURRENCY,
         "amount": str(CASH_AMOUNT),
     })
@@ -147,22 +207,25 @@ def ensure_cash_holding() -> None:
 
 
 def ensure_trade_intent() -> None:
+    issuer = party_id(ISSUER)
+    seller = party_id(SELLER)
+    seller_agent = party_id(SELLER_AGENT)
     tid = template_id("TradeIntent")
-    existing = query_template(SELLER, tid)
+    existing = query_template(seller, tid)
     for item in existing:
         payload = item.get("payload", {})
         if (
-            payload.get("seller") == SELLER
-            and payload.get("sellerAgent") == SELLER_AGENT
+            payload.get("seller") == seller
+            and payload.get("sellerAgent") == seller_agent
             and payload.get("instrument") == INSTRUMENT
         ):
-            print(f"[seed] trade intent already present for {SELLER} ({INSTRUMENT})")
+            print(f"[seed] trade intent already present for {seller} ({INSTRUMENT})")
             return
 
-    cid = create_contract(SELLER, tid, {
-        "issuer": ISSUER,
-        "seller": SELLER,
-        "sellerAgent": SELLER_AGENT,
+    cid = create_contract(seller, tid, {
+        "issuer": issuer,
+        "seller": seller,
+        "sellerAgent": seller_agent,
         "instrument": INSTRUMENT,
         "quantity": str(INTENT_QTY),
         "minPrice": str(INTENT_MIN_PRICE),
@@ -172,6 +235,14 @@ def ensure_trade_intent() -> None:
 
 def main() -> int:
     print(f"[seed] JSON API: {JSON_API_URL}")
+    resolve_party_ids()
+    print(
+        "[seed] party map:"
+        f" Company={party_id(ISSUER)}"
+        f" Seller={party_id(SELLER)}"
+        f" SellerAgent={party_id(SELLER_AGENT)}"
+        f" Buyer={party_id(BUYER)}"
+    )
     ensure_asset_holding()
     ensure_cash_holding()
     ensure_trade_intent()

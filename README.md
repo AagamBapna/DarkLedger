@@ -4,48 +4,94 @@
 
 AI agents autonomously negotiate private trades using Daml smart contracts, with full sub-transaction privacy — no public order book, no open pools, no DeFi patterns. Canton's privacy model ensures only stakeholders see their data.
 
+## Why This Matters
+
+Traditional secondary markets for institutional assets (private equity, pre-IPO shares, venture fund stakes) suffer from two problems:
+
+1. **Information leakage**: Public order books reveal trading intent, enabling front-running and adverse selection.
+2. **Manual negotiation**: Trades require weeks of back-and-forth between legal teams.
+
+**Agentic Shadow-Cap** solves both by combining Canton's sub-transaction privacy with autonomous AI agents that act as "legal representatives" — discovering counterparties, negotiating prices, and settling trades atomically, all without exposing any information to unauthorized observers.
+
 ## Architecture
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ Seller Node  │     │ Buyer Node   │     │ Issuer Node  │
-│  :5011       │     │  :5021       │     │  :5031       │
-│              │     │              │     │              │
-│ SellerAgent  │     │ BuyerAgent   │     │  Company     │
-│ (Python+LLM) │     │ (Python+LLM) │     │ (Compliance) │
-└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
-       │                    │                    │
-       └────────────────────┼────────────────────┘
-                            │
-                   ┌────────┴────────┐
-                   │  Canton Domain  │
-                   │  (Privacy Layer)│
-                   └─────────────────┘
+┌────────────────────┐    ┌────────────────────┐    ┌────────────────────┐
+│  Seller Participant│    │  Buyer Participant  │    │ Issuer Participant │
+│    Node :5011      │    │    Node :5021       │    │    Node :5031      │
+│                    │    │                     │    │                    │
+│  Seller Party      │    │  Buyer Party        │    │  Company Party     │
+│  SellerAgent Party │    │  BuyerAgent Party   │    │  (Compliance/ROFR) │
+│                    │    │                     │    │                    │
+│  ┌──────────────┐  │    │  ┌──────────────┐   │    │                    │
+│  │ Python Agent │  │    │  │ Python Agent │   │    │                    │
+│  │ (LLM+Rules)  │  │    │  │ (LLM+Rules)  │   │    │                    │
+│  └──────────────┘  │    │  └──────────────┘   │    │                    │
+└─────────┬──────────┘    └─────────┬───────────┘    └─────────┬──────────┘
+          │                        │                           │
+          └────────────────────────┼───────────────────────────┘
+                                   │
+                          ┌────────┴────────┐
+                          │  Canton Domain  │
+                          │  (Privacy Layer)│
+                          │   :5018-5019    │
+                          └─────────────────┘
+
+         ┌──────────────────────────────────────────┐
+         │        Nginx Proxy :7575                 │
+         │  Routes by X-Ledger-Party header         │
+         │  Seller/SellerAgent → seller-node:5013   │
+         │  Buyer/BuyerAgent   → buyer-node:5023    │
+         │  Company            → issuer-node:5033   │
+         └──────────────────────────────────────────┘
+
+         ┌──────────────────────────────────────────┐
+         │     React Dashboard :5173                │
+         │  Party Perspective Switcher              │
+         │  Owner | Market | Compliance | Agent Logs│
+         └──────────────────────────────────────────┘
 ```
 
-### Privacy Model
-- **TradeIntent**: Visible only to Seller + SellerAgent + Issuer
-- **DiscoveryInterest**: Blind signal (instrument + side only), visible to Issuer + explicitly targeted counterparty agent(s)
-- **PrivateNegotiation**: Created only after match. Visible only to matched parties + Issuer
-- **TradeSettlement**: DvP atomic swap with immutable audit trail
-- **AgentDecisionLog**: AI reasoning logged on-ledger per agent
+## Privacy Model — What Each Party Sees
 
-### AI Agent Architecture
-Each agent uses an **LLM advisor** (GPT-4o-mini) for pricing and negotiation decisions, with graceful fallback to rule-based logic when no API key is set. Every decision is logged on-ledger in `AgentDecisionLog` contracts, creating an auditable trail of AI reasoning.
+This is the core innovation. Canton's sub-transaction privacy ensures **no global ledger state** — each party only sees contracts they are a stakeholder of.
+
+| Contract | Seller | SellerAgent | Buyer | BuyerAgent | Issuer (Company) | Public/Outsider |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **AssetHolding** (Seller's shares) | Observer | - | - | - | Signatory | - |
+| **CashHolding** (Buyer's cash) | - | - | Observer | - | Signatory | - |
+| **TradeIntent** (sell directive) | Signatory | Observer | - | - | Observer | - |
+| **DiscoveryInterest** (blind signal) | Observer | Signatory | - | Targeted | Observer | - |
+| **PrivateNegotiation** | Observer | Observer | Observer | Observer | Signatory | - |
+| **TradeSettlement** | Observer | Observer | Observer | Observer | Signatory | - |
+| **TradeAuditRecord** | Observer | Observer | Observer | Observer | Signatory | - |
+| **AgentDecisionLog** | Observer | Signatory | - | - | - | - |
+
+**Key insight**: The "Public" perspective in the UI shows **zero contracts** — demonstrating that an unauthorized observer cannot see any market activity whatsoever.
 
 ## Quick Start
+
+### Prerequisites
+- [Daml SDK 2.10.x](https://docs.daml.com/getting-started/installation.html)
+- [Docker + Docker Compose](https://docs.docker.com/get-docker/)
+- [Node.js 18+](https://nodejs.org/) (for the React UI)
+- Python 3.10+ (for agents)
 
 ### One-Command Demo (requires Docker + Daml SDK)
 ```bash
 make demo
 ```
+This will: build Daml → start Canton nodes → upload DAR → seed data → start agents → start UI.
+
+Open http://localhost:5173 to see the dashboard.
 
 ### Sandbox Demo (no Docker needed)
 ```bash
 make sandbox
 ```
+Runs the full Daml workflow on a local sandbox (no multi-node privacy separation).
 
-### Manual Setup
+### Manual Step-by-Step
 ```bash
 # 1. Build Daml contracts
 make build
@@ -66,66 +112,206 @@ make agents
 make ui
 ```
 
-Open http://localhost:5173 to see the dashboard.
+### Stopping
+```bash
+make agents-stop   # Stop Python agents
+make ui-stop       # Stop Vite dev server
+make down          # Stop Docker containers
+```
+
+### Public Web Demo (No Docker)
+Use this path if you only need a publicly accessible web dApp URL with party-visibility proof.
+
+```bash
+# 1. Prepare venv + Python deps
+make demo-web-venv
+
+# 2. Start backend (sandbox + json-api + agents + market-api + gateway)
+make demo-web-backend
+```
+
+Then run the UI in another terminal:
+
+```bash
+cd ui
+npm install
+VITE_JSON_API_URL=http://localhost:8080/ledger \
+VITE_MARKET_API_URL=http://localhost:8080/market \
+npm run dev
+```
+
+For public deployment:
+- Deploy backend process from `deploy/public_demo/` on a host with a public URL.
+- Deploy `ui/` to Vercel.
+- Set Vercel env vars:
+  - `BACKEND_PUBLIC_URL=https://<your-backend-url>`
+  - `VITE_JSON_API_URL=/api/ledger`
+  - `VITE_MARKET_API_URL=/api/market`
+  - `VITE_JSON_API_USE_INSECURE_TOKEN=true`
+- Use the Vercel URL as your demo URL.
+
+## Daml Smart Contracts (8 Templates)
+
+All contracts are in `daml/src/AgenticShadowCap/Market.daml`:
+
+| Template | Purpose | Key Choices |
+|---|---|---|
+| **AssetHolding** | Equity ownership | `TransferAsset`, `SplitAsset` |
+| **CashHolding** | Cash/currency balance | `TransferCash`, `SplitCash` |
+| **TradeIntent** | Seller's private sell directive | `UpdatePrice`, `ArchiveIntent` |
+| **DiscoveryInterest** | Blind market signal (no price/volume) | `MatchWith`, `CancelInterest`, `RetireForMatch` |
+| **PrivateNegotiation** | Two-party negotiation channel | `SubmitSellerTerms`, `SubmitBuyerTerms`, `AcceptBySeller`, `AcceptByBuyer`, `ApproveMatch`, `StartSettlement` |
+| **TradeSettlement** | Atomic DvP swap | `FinalizeSettlement` (real DvP), `SimpleFinalizeSettlement` (audit-only) |
+| **TradeAuditRecord** | Immutable settlement record | (none - append-only) |
+| **AgentDecisionLog** | AI reasoning audit trail | (none - append-only) |
+
+### Test Coverage
+20 passing test cases covering:
+- Happy-path full lifecycle (with and without DvP)
+- Privacy: TradeIntent invisible to Buyer
+- Privacy: Negotiation invisible to outsiders
+- Privacy: Discovery signal scoped to targeted parties
+- Validation: zero/negative quantities, zero prices
+- Validation: ApproveMatch requires both-party acceptance
+- Validation: same-side matching and self-matching blocked
+- Rejection: mid-flight negotiation archival
+- Asset split and transfer
+
+## Python AI Agents
+
+### Agent Framework (`agent/base_agent.py`)
+Both agents extend `BaseAgent`, which provides:
+- dazl connection to Canton participant node
+- Concurrent async loop execution
+- Market data + agent control loading
+- Ledger query/create/exercise with retry
+- On-ledger decision logging
+
+### Seller Agent (`agent/seller_agent.py`)
+- **Repricing loop**: Monitors `TradeIntent` contracts. Uses LLM (or rule-based fallback) to adjust `minPrice` based on:
+  - Market volatility (from `mock_market_feed.json`)
+  - **News sentiment**: If "negative" → increase minPrice by 5%. If "very_negative" → archive intent.
+  - Absolute floor protection: never drops below 60% of original price.
+- **Discovery loop**: Automatically posts `DiscoveryInterest` (Sell) for each active intent — revealing only instrument + side (no price/volume).
+- **Negotiation loop**: Submits initial terms, evaluates counteroffers, accepts or counters.
+
+### Buyer Agent (`agent/buyer_agent.py`)
+- **Discovery loop**: Monitors for sell-side `DiscoveryInterest` signals. Posts matching buy signal when mandate matches.
+- **Negotiation loop**: Evaluates seller terms against dynamic `maxPrice` ceiling. Accepts if within range, counters at ceiling otherwise.
+- Absolute ceiling protection: never exceeds 140% of original max price.
+
+### LLM Advisor (`agent/llm_advisor.py`)
+- Calls OpenAI GPT-4o-mini for pricing/negotiation decisions
+- Graceful fallback to rule-based logic when no API key is set
+- Every decision logged on-ledger in `AgentDecisionLog`
+
+### Market Event API (`agent/market_api.py`)
+FastAPI sidecar on port 8090:
+- `POST /market-event` — Inject events (earnings, SEC investigation, crash, etc.)
+- `GET /status` — Agent health + current feed state
+- `GET /events` — List available event types
+- `GET/POST /agent-config` — Toggle auto-repricing per agent
+
+## React Dashboard
+
+### Perspective Switcher
+Switch between parties to see Canton's privacy model in action:
+
+| Perspective | What You See |
+|---|---|
+| **Seller / SellerAgent** | Private holdings, trade intents, active negotiations, agent activity timeline, news injector |
+| **Buyer / BuyerAgent** | Cash holdings, negotiations where buyer is involved |
+| **Company (Issuer)** | All negotiations for compliance review, ROFR approval buttons, DvP settlement monitor, audit trail |
+| **Public** | **NOTHING** — zero contracts, zero holdings. Canton's privacy proven. |
+
+### Views
+- **Owner View**: Holdings, trade intents with manual price override, private negotiations, news event injector, agent activity timeline
+- **Market View**: Zero-data until a match is found (no public order book)
+- **Compliance View**: Negotiation approval queue, DvP settlement visualization with step progress, immutable audit trail
+- **Agent Logs View**: On-ledger AI decision reasoning with expandable market context details
+
+## Deployment
+
+### Docker Compose (`deploy/docker-compose.yml`)
+8 services:
+- **domain**: Canton domain (public/admin API)
+- **seller-participant**: Seller + SellerAgent parties
+- **buyer-participant**: Buyer + BuyerAgent parties
+- **issuer-participant**: Company (Issuer) party
+- **seller-agent**: Python seller agent (profile: agent)
+- **buyer-agent**: Python buyer agent (profile: agent)
+- **market-api**: FastAPI event injection (profile: agent)
+- **json-api-proxy**: Nginx routing by `X-Ledger-Party` header
+
+### Makefile Targets
+| Target | Description |
+|---|---|
+| `make build` | Compile Daml package |
+| `make up` | Start Canton nodes |
+| `make down` | Stop all containers |
+| `make upload` | Upload DAR to all nodes |
+| `make seed` | Create demo contracts |
+| `make agents` | Start seller + buyer agents + market API |
+| `make agents-stop` | Stop agent processes |
+| `make ui` | Start React dev server |
+| `make demo` | Full end-to-end workflow |
+| `make sandbox` | Local sandbox demo (no Docker) |
+| `make status` | Show running processes |
+| `make clean` | Remove build artifacts |
 
 ## Repository Layout
 
 ```
-daml/src/AgenticShadowCap/
-├── Market.daml          # Core templates: TradeIntent, DiscoveryInterest,
-│                        # PrivateNegotiation, TradeSettlement, AssetHolding,
-│                        # CashHolding, TradeAuditRecord, AgentDecisionLog
-└── MvpScript.daml       # End-to-end workflow simulation
+daml/
+├── daml.yaml                    # SDK 2.10.3, parties, dependencies
+├── src/AgenticShadowCap/
+│   ├── Market.daml              # 8 templates — the dark pool logic
+│   ├── MvpScript.daml           # End-to-end workflow simulation
+│   └── Tests.daml               # 20 test scenarios
+└── .daml/dist/                  # Compiled DAR
 
 agent/
-├── seller_agent.py      # Seller's autonomous AI legal representative
-├── buyer_agent.py       # Buyer's autonomous AI legal representative
-├── llm_advisor.py       # LLM-powered pricing + negotiation advisor
-├── market_api.py        # FastAPI sidecar for market event injection
-├── agent_controls.json  # Live agent control toggles (auto-reprice on/off)
-├── mock_market_feed.json
-└── requirements.txt
+├── base_agent.py                # BaseAgent class (dazl connection framework)
+├── seller_agent.py              # SellerAgent (extends BaseAgent)
+├── buyer_agent.py               # BuyerAgent (extends BaseAgent)
+├── llm_advisor.py               # LLM pricing + negotiation advisor
+├── common.py                    # Shared utilities
+├── market_api.py                # FastAPI market event injection sidecar
+├── mock_market_feed.json        # Simulated market data
+├── agent_controls.json          # Auto-reprice toggles
+└── requirements.txt             # dazl, httpx, fastapi, uvicorn
 
-ui/                      # React + TypeScript + Vite + Tailwind
-├── src/views/
-│   ├── OwnerView.tsx    # Private holdings + agent activity + news injector
-│   ├── MarketView.tsx   # Zero-data view until match found
-│   ├── ComplianceView.tsx # ROFR approval + DvP settlement visualization
-│   └── AgentLogsView.tsx  # AI decision reasoning panel (on-ledger logs)
-└── src/components/
-    ├── NewsInjector.tsx  # Inject market events to trigger agents live
-    └── MatchFoundToast.tsx
+ui/
+├── src/
+│   ├── App.tsx                  # Root: polling, party switching, state
+│   ├── views/                   # OwnerView, MarketView, ComplianceView, AgentLogsView
+│   ├── components/              # NewsInjector, MatchFoundToast
+│   ├── lib/ledgerClient.ts      # JSON API client with party-based routing
+│   ├── types/contracts.ts       # TypeScript interfaces for all Daml contracts
+│   └── context/PartyContext.tsx  # Party state management
+├── tailwind.config.ts
+└── package.json
 
 deploy/
-├── docker-compose.yml   # Canton domain + 3 participant nodes + nginx proxy
-├── canton/              # Per-node configs and bootstrap scripts
-├── json-api/nginx.conf  # Routes requests by X-Ledger-Party header
-└── scripts/seed_demo.py # Seeds holdings + trade intent for repeatable demos
+├── docker-compose.yml           # 8-service Canton deployment
+├── canton/                      # Node configs + bootstrap scripts
+├── json-api/nginx.conf          # Party-based request routing
+├── scripts/seed_demo.py         # Deterministic demo seeding
+└── devnet/                      # Canton L1 Devnet deployment guide
 ```
 
 ## Workflow
 
-1. **Seller** posts a private `TradeIntent` (visible only to Seller, Agent, Issuer)
-2. **Seller Agent** reprices based on market data + LLM reasoning
-3. **Agents** post blind `DiscoveryInterest` signals (no price/volume exposed), targeted only to counterpart agents + issuer
-4. **Issuer** matches opposite interests → creates `PrivateNegotiation`
-5. **Agents** negotiate privately, logging every decision on-ledger
-6. **Issuer** exercises `ApproveMatch` (ROFR/compliance gate)
-7. **Issuer** starts and finalizes `TradeSettlement` (DvP atomic swap)
-8. Immutable `TradeAuditRecord` created on settlement
-
-## Key Features
-
-- **No Public Order Book**: Discovery uses blind signaling only
-- **AI-Powered Agents**: LLM advisor with rule-based fallback
-- **On-Ledger Decision Audit**: Every AI decision logged with reasoning
-- **DvP Settlement**: Real asset + cash swap with change returned
-- **Live Market Events**: Inject news events from the UI to trigger agents
-- **Live Agent Controls**: Toggle seller/buyer auto-repricing from UI (`/agent-config`)
-- **Perspective Switching**: See the ledger as different parties
-- **Time-Bounded Negotiations**: Auto-expire stale negotiations
-- **Contract Keys**: Prevent duplicate discovery signals
-- **Deterministic Demo Seed**: `make seed` creates reproducible starting state
+1. **Issuer** mints `AssetHolding` (5000 shares to Seller) and `CashHolding` ($500k to Buyer)
+2. **Seller** creates `TradeIntent` (1500 shares at $95 floor) — visible only to Seller + Agent + Issuer
+3. **Seller Agent** reprices based on market data + news sentiment + LLM reasoning
+4. **Seller Agent** posts blind `DiscoveryInterest` (Sell) — reveals only instrument + side
+5. **Buyer Agent** detects sell signal, posts matching `DiscoveryInterest` (Buy)
+6. **Issuer** matches opposite interests → creates `PrivateNegotiation`
+7. **Agents** negotiate privately, logging every decision on-ledger with reasoning
+8. Both agents accept terms → **Issuer** exercises `ApproveMatch` (ROFR/compliance gate)
+9. **Issuer** starts settlement → exercises `FinalizeSettlement` (DvP atomic swap)
+10. `TradeAuditRecord` created — immutable settlement record visible to all parties
 
 ## Configuration
 
@@ -134,20 +320,20 @@ deploy/
 |---|---|---|
 | `DAML_LEDGER_URL` | `http://localhost:5011` | Canton node gRPC endpoint |
 | `SELLER_AGENT_PARTY` | `SellerAgent` | Party ID for seller agent |
-| `OPENAI_API_KEY` | (none) | OpenAI key for LLM decisions |
+| `BUYER_AGENT_PARTY` | `BuyerAgent` | Party ID for buyer agent |
+| `OPENAI_API_KEY` | (none) | OpenAI key for LLM decisions (optional) |
 | `AGENT_POLL_SECONDS` | `5` | Polling interval |
 | `MARKET_FEED_PATH` | `./agent/mock_market_feed.json` | Market data feed path |
-| `AGENT_CONTROL_PATH` | `./agent/agent_controls.json` | Shared auto-reprice toggle state |
-| `SELLER_COUNTERPARTY_AGENT` | `BuyerAgent` | Who can see seller discovery whispers |
-| `BUYER_COUNTERPARTY_AGENT` | `SellerAgent` | Who can see buyer discovery whispers |
+| `AGENT_CONTROL_PATH` | `./agent/agent_controls.json` | Auto-reprice toggle state |
 
 ### Environment Variables (UI)
 | Variable | Default | Description |
 |---|---|---|
 | `VITE_JSON_API_URL` | `http://localhost:7575` | JSON API proxy URL |
 | `VITE_MARKET_API_URL` | `http://localhost:8090` | Market event API URL |
+| `VITE_POLL_INTERVAL_MS` | `3000` | UI polling interval |
 
-## Devnet Runbook
+## Devnet Deployment
 
 For Canton L1 Devnet deployment steps and submission checklist, see `deploy/devnet/README.md`.
 

@@ -1,10 +1,11 @@
-.PHONY: build up down parties upload seed controls-reset agents agents-stop ui ui-stop demo clean status
+.PHONY: build up down parties upload seed controls-reset agents agents-stop ui ui-stop demo clean status test test-daml test-e2e test-lifecycle devnet demo-web-venv demo-web-backend
 
 DAML_DIR   := daml
 DEPLOY_DIR := deploy
 AGENT_DIR  := agent
 UI_DIR     := ui
 DAR_FILE   := $(DAML_DIR)/.daml/dist/agentic-shadow-cap-0.1.0.dar
+PYTHON     := python3
 
 SELLER_PORT := 5011
 BUYER_PORT  := 5021
@@ -56,14 +57,14 @@ controls-reset:
 # ─── Python Agents ───────────────────────────────────────────────────────────
 agents:
 	@echo "==> Installing Python dependencies..."
-	pip install -q -r $(AGENT_DIR)/requirements.txt
+	$(PYTHON) -m pip install -q -r $(AGENT_DIR)/requirements.txt
 	@echo "==> Starting seller agent..."
 	PYTHONUNBUFFERED=1 DAML_LEDGER_URL=http://localhost:$(SELLER_PORT) \
 		SELLER_AGENT_PARTY=SellerAgent \
 		SELLER_PARTY=Seller \
 		MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
 		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
-		python $(AGENT_DIR)/seller_agent.py &
+		$(PYTHON) $(AGENT_DIR)/seller_agent.py &
 	@echo "==> Starting buyer agent..."
 	PYTHONUNBUFFERED=1 DAML_LEDGER_URL=http://localhost:$(BUYER_PORT) \
 		BUYER_AGENT_PARTY=BuyerAgent \
@@ -71,11 +72,11 @@ agents:
 		TARGET_INSTRUMENT=COMPANY-SERIES-A \
 		MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
 		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
-		python $(AGENT_DIR)/buyer_agent.py &
+		$(PYTHON) $(AGENT_DIR)/buyer_agent.py &
 	@echo "==> Starting market event API..."
 	MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
 		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
-		uvicorn agent.market_api:app --host 0.0.0.0 --port 8090 &
+		$(PYTHON) -m uvicorn agent.market_api:app --host 0.0.0.0 --port 8090 &
 	@echo "==> All agents running in background."
 
 agents-stop:
@@ -128,6 +129,43 @@ demo:
 	@echo "  API:    http://localhost:8090/status"
 	@echo "  Inject: http://localhost:8090/docs"
 	@echo "============================================"
+
+# ─── Testing ────────────────────────────────────────────────────────────────
+test-daml:
+	@echo "==> Running Daml tests..."
+	cd $(DAML_DIR) && daml test
+	@echo "==> All Daml tests passed."
+
+test-e2e:
+	@echo "==> Running E2E smoke test (requires running system)..."
+	bash test_e2e.sh
+
+test-lifecycle:
+	@echo "==> Running full lifecycle test (requires running nodes, no agents needed)..."
+	bash test_lifecycle.sh
+
+test: test-daml
+	@echo "==> Unit tests complete. For integration tests run: make test-e2e (with make demo running)"
+
+devnet:
+	@echo "==> Setting up Canton L1 DevNet validator..."
+	bash $(DEPLOY_DIR)/devnet/setup_devnet_validator.sh
+
+# ─── Public Web Demo (no Docker) ───────────────────────────────────────────
+demo-web-venv:
+	@echo "==> Creating/updating local virtualenv..."
+	$(PYTHON) -m venv .venv
+	.venv/bin/python -m pip install --upgrade pip
+	.venv/bin/python -m pip install -r $(AGENT_DIR)/requirements.txt
+	@echo "==> Virtualenv ready: .venv"
+
+demo-web-backend:
+	@if [ ! -x .venv/bin/python ]; then \
+		echo "==> Missing .venv. Run: make demo-web-venv"; \
+		exit 1; \
+	fi
+	@echo "==> Starting no-Docker public demo backend..."
+	.venv/bin/python deploy/public_demo/run_backend.py
 
 # ─── Status ──────────────────────────────────────────────────────────────────
 status:

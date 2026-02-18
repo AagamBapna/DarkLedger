@@ -1,118 +1,190 @@
-# Canton L1 Devnet Runbook
+# Canton L1 DevNet Deployment
 
-This runbook describes how to run Agentic Shadow-Cap on Canton L1 Devnet infrastructure (instead of local Docker).
+Deploy Agentic Shadow-Cap to the real Canton L1 DevNet (Global Synchronizer).
 
-## 1) Prerequisites
+## Architecture Difference
 
-- Access to three Devnet participants (seller, buyer, issuer) with:
-  - Ledger API (gRPC) endpoints
-  - JSON API endpoints (or a shared routed gateway)
-  - Party IDs enabled (`Seller`, `SellerAgent`, `Buyer`, `BuyerAgent`, `Company`)
-- Daml SDK 2.10.x (`daml` CLI)
+| | Local (make demo) | DevNet (make devnet) |
+|---|---|---|
+| Canton nodes | 3 local Docker containers | 1 splice-node validator on L1 |
+| Domain | Local domain container | Global Synchronizer |
+| Privacy | Protocol-enforced (same) | Protocol-enforced (same) |
+| Persistence | In-memory (resets on stop) | DevNet state (persistent) |
+| Network | localhost only | Public Canton L1 DevNet |
+
+## Quick Start (One Command)
+
+```bash
+make devnet
+```
+
+This will:
+1. Download splice-node v0.5.10
+2. Get an onboarding secret from the DevNet Super Validator
+3. Start a Canton validator connected to the Global Synchronizer
+4. Upload the Shadow-Cap DAR
+5. Print endpoints for agents + UI
+
+## Manual Step-by-Step
+
+### 1. Prerequisites
+
+- Docker Desktop running
+- Daml SDK 2.10.x
 - Python 3.10+
-- Node.js 18+
+- Internet access (no VPN needed for public DevNet)
 
-## 2) Build DAR
+### 2. Download splice-node
 
 ```bash
+VERSION="0.5.10"
+MIGRATION_ID="1"
+mkdir -p ~/.canton/${VERSION}
+cd ~/.canton/${VERSION}
+
+wget https://github.com/digital-asset/decentralized-canton-sync/releases/download/v${VERSION}/${VERSION}_splice-node.tar.gz
+tar xzf ${VERSION}_splice-node.tar.gz
+cd splice-node/docker-compose/validator
+```
+
+### 3. Get onboarding secret
+
+```bash
+SECRET=$(curl -X POST https://sv.sv-1.dev.global.canton.network.sync.global/api/sv/v0/devnet/onboard/validator/prepare)
+```
+
+Secret is valid for 1 hour. If sv-1 is unavailable, use sv-2.
+
+### 4. Start validator
+
+```bash
+# Enable development auth mode
+echo "COMPOSE_FILE=compose.yaml:compose-disable-auth.yaml" >> .env
+echo 'AUTH_URL=https://unsafe.auth' >> .env
+
+export IMAGE_TAG=0.5.10
+
+./start.sh \
+  -s "https://sv.sv-1.dev.global.canton.network.sync.global" \
+  -o "${SECRET}" \
+  -p "shadowcap-hackathon" \
+  -m "1" \
+  -w
+```
+
+Wait 2-5 minutes for the validator to become healthy:
+```bash
+docker ps --format '{{.Names}}: {{.Status}}' | grep splice
+```
+
+### 5. Find your endpoints
+
+```bash
+# Find ledger API and JSON API ports
+docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep splice
+```
+
+Look for ports mapped to 5001 (ledger API) and 7575 (JSON API).
+
+### 6. Build and upload DAR
+
+```bash
+cd ~/canton  # back to project root
 make build
+daml ledger upload-dar daml/.daml/dist/agentic-shadow-cap-0.1.0.dar --host localhost --port <LEDGER_PORT>
 ```
 
-DAR output:
-
-`daml/.daml/dist/agentic-shadow-cap-0.1.0.dar`
-
-## 3) Upload DAR to Devnet Participants
-
-Set your Devnet ledger endpoints:
+### 7. Seed demo contracts
 
 ```bash
-export SELLER_LEDGER_HOST=<seller-ledger-host>
-export SELLER_LEDGER_PORT=<seller-ledger-port>
-export BUYER_LEDGER_HOST=<buyer-ledger-host>
-export BUYER_LEDGER_PORT=<buyer-ledger-port>
-export ISSUER_LEDGER_HOST=<issuer-ledger-host>
-export ISSUER_LEDGER_PORT=<issuer-ledger-port>
+JSON_API_URL=http://localhost:<JSON_API_PORT> python3 deploy/scripts/seed_demo.py
 ```
 
-Upload:
+### 8. Start agents
 
 ```bash
-daml ledger upload-dar daml/.daml/dist/agentic-shadow-cap-0.1.0.dar --host "$SELLER_LEDGER_HOST" --port "$SELLER_LEDGER_PORT"
-daml ledger upload-dar daml/.daml/dist/agentic-shadow-cap-0.1.0.dar --host "$BUYER_LEDGER_HOST" --port "$BUYER_LEDGER_PORT"
-daml ledger upload-dar daml/.daml/dist/agentic-shadow-cap-0.1.0.dar --host "$ISSUER_LEDGER_HOST" --port "$ISSUER_LEDGER_PORT"
+# Seller agent
+DAML_LEDGER_URL=http://localhost:<LEDGER_PORT> \
+  SELLER_AGENT_PARTY=SellerAgent SELLER_PARTY=Seller \
+  AGENT_CONTROL_PATH=agent/agent_controls.json \
+  MARKET_FEED_PATH=agent/mock_market_feed.json \
+  python3 agent/seller_agent.py &
+
+# Buyer agent
+DAML_LEDGER_URL=http://localhost:<LEDGER_PORT> \
+  BUYER_AGENT_PARTY=BuyerAgent BUYER_PARTY=Buyer \
+  TARGET_INSTRUMENT=COMPANY-SERIES-A \
+  AGENT_CONTROL_PATH=agent/agent_controls.json \
+  MARKET_FEED_PATH=agent/mock_market_feed.json \
+  python3 agent/buyer_agent.py &
+
+# Market API
+MARKET_FEED_PATH=agent/mock_market_feed.json \
+  AGENT_CONTROL_PATH=agent/agent_controls.json \
+  uvicorn agent.market_api:app --host 0.0.0.0 --port 8090 &
 ```
 
-Or run the automated bootstrap:
-
-```bash
-deploy/devnet/run_devnet_demo.sh
-```
-
-## 4) Seed Devnet Demo Contracts
-
-Use the seed script against your Devnet JSON API gateway:
-
-```bash
-export JSON_API_URL=<devnet-json-api-url>
-export JSON_API_TOKEN=<jwt-with-party-rights>   # recommended for devnet
-python3 deploy/scripts/seed_demo.py
-```
-
-If your deployment uses package ID-qualified template IDs:
-
-```bash
-export PACKAGE_ID=<uploaded-dar-package-id>
-python3 deploy/scripts/seed_demo.py
-```
-
-## 5) Run Agents Against Devnet
-
-Seller agent:
-
-```bash
-export DAML_LEDGER_URL=http://<seller-ledger-host>:<seller-ledger-port>
-export SELLER_AGENT_PARTY=SellerAgent
-export SELLER_PARTY=Seller
-export AGENT_CONTROL_PATH=agent/agent_controls.json
-python3 agent/seller_agent.py
-```
-
-Buyer agent:
-
-```bash
-export DAML_LEDGER_URL=http://<buyer-ledger-host>:<buyer-ledger-port>
-export BUYER_AGENT_PARTY=BuyerAgent
-export BUYER_PARTY=Buyer
-export TARGET_INSTRUMENT=COMPANY-SERIES-A
-export AGENT_CONTROL_PATH=agent/agent_controls.json
-python3 agent/buyer_agent.py
-```
-
-Market API:
-
-```bash
-export MARKET_FEED_PATH=agent/mock_market_feed.json
-export AGENT_CONTROL_PATH=agent/agent_controls.json
-uvicorn agent.market_api:app --host 0.0.0.0 --port 8090
-```
-
-## 6) Run UI Against Devnet
+### 9. Start UI
 
 ```bash
 cd ui
-VITE_JSON_API_URL=<devnet-json-api-url> \
-VITE_MARKET_API_URL=http://localhost:8090 \
-npm run dev
+VITE_JSON_API_URL=http://localhost:<JSON_API_PORT> \
+  VITE_MARKET_API_URL=http://localhost:8090 \
+  npm run dev
 ```
 
-## 7) Submission Evidence Checklist
+### 10. Run E2E tests against DevNet
 
-- Screenshot/video of:
-  - Seller perspective with private `TradeIntent`
-  - Buyer perspective without seller private order details
-  - BuyerAgent perspective seeing only blind targeted discovery signal
-  - Company perspective approving and finalizing settlement
-  - Agent logs (`AgentDecisionLog`) with reasoning
-- Tx/contract IDs for at least one full settlement lifecycle
-- Link to deployed UI demo URL and public source repo
+```bash
+JSON_API_URL=http://localhost:<JSON_API_PORT> bash test_lifecycle.sh
+```
+
+## Verify on DevNet Explorer
+
+After running the lifecycle, check:
+- https://scan.sv-1.dev.global.canton.network.sync.global
+
+Your transactions will appear on the Global Synchronizer.
+
+## Submission Checklist
+
+- [ ] Validator running and healthy on DevNet
+- [ ] DAR uploaded to DevNet participant
+- [ ] Demo contracts seeded (AssetHolding, CashHolding, TradeIntent)
+- [ ] `test_lifecycle.sh` passes against DevNet endpoints
+- [ ] UI accessible and showing party-specific views
+- [ ] Screenshot/video of:
+  - Seller perspective showing private TradeIntent
+  - Public perspective showing ZERO contracts
+  - Company (compliance) approving and settling
+  - Agent logs with AI reasoning
+- [ ] DevNet explorer showing transactions
+
+## Troubleshooting
+
+### "Cannot connect to Docker daemon"
+Start Docker Desktop from Applications.
+
+### Onboarding secret fails
+Try sv-2 instead of sv-1:
+```bash
+SECRET=$(curl -X POST https://sv.sv-2.dev.global.canton.network.sync.global/api/sv/v0/devnet/onboard/validator/prepare)
+```
+
+### Validator not becoming healthy
+```bash
+docker compose logs -f validator  # check for errors
+```
+
+### DAR upload fails
+Ensure the ledger API port is correct:
+```bash
+docker ps | grep 5001  # find the mapped port
+```
+
+## Stop Everything
+
+```bash
+cd ~/.canton/0.5.10/splice-node/docker-compose/validator
+./stop.sh
+```

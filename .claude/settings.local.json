@@ -2,7 +2,15 @@
   "permissions": {
     "allow": [
       "Bash(daml version:*)",
-      "Bash(pip3 list:*)"
+      "Bash(pip3 list:*)",
+      "Bash(wc:*)",
+      "Bash(daml build:*)",
+      "Bash(daml test:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite build:*)",
+      "Bash(python3:*)",
+      "Bash(chmod:*)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

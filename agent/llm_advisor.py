@@ -27,7 +27,26 @@ class LLMAdvice:
     action: str  # hold | reprice | archive | accept | counter
 
 
-def _rule_based_seller(current_price: Decimal, volatility: Decimal) -> LLMAdvice:
+def _rule_based_seller(current_price: Decimal, volatility: Decimal, news: str = "neutral") -> LLMAdvice:
+    # News sentiment overrides: negative news increases minPrice to protect seller
+    if news == "very_negative":
+        return LLMAdvice(
+            current_price,
+            "Very negative news detected: archiving intent to protect seller from adverse conditions",
+            0.85,
+            "archive",
+        )
+    if news == "negative":
+        factor = Decimal("1.05")
+        rec = (current_price * factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return LLMAdvice(
+            rec,
+            "Negative news sentiment: increasing minPrice by 5% to compensate for risk",
+            0.8,
+            "reprice",
+        )
+
+    # Volatility-based rules
     if volatility >= Decimal("0.45"):
         factor, reason = Decimal("0.90"), "Extreme volatility: lowering floor aggressively to capture liquidity"
     elif volatility >= Decimal("0.30"):
@@ -146,7 +165,7 @@ def get_pricing_advice(
     event_type = market_data.get("event_type", "none")
 
     if role == "seller":
-        fallback = _rule_based_seller(current_price, volatility)
+        fallback = _rule_based_seller(current_price, volatility, news)
     else:
         fallback = _rule_based_buyer(current_price, volatility)
 

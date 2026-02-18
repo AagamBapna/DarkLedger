@@ -82,6 +82,17 @@ export function ComplianceView({
     setSettling(null);
   };
 
+  const handleSimpleFinalize = async (contractId: string) => {
+    setSettling(contractId);
+    setActionError(null);
+    try {
+      await exerciseChoice(party, TEMPLATE_IDS.tradeSettlement, contractId, "SimpleFinalizeSettlement", {});
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "SimpleFinalizeSettlement failed");
+    }
+    setSettling(null);
+  };
+
   return (
     <section className="space-y-6">
       {/* Negotiation Queue */}
@@ -206,17 +217,26 @@ export function ComplianceView({
                   </div>
 
                   {!item.payload.settled && isIssuer && (
-                    <button
-                      className="mt-3 rounded-md bg-signal-mint px-3 py-1.5 text-sm font-semibold text-shell-950 disabled:opacity-50"
-                      disabled={settling === item.contractId || !canFinalizeDvP}
-                      onClick={() => handleFinalize(item.contractId, sellerAsset!.contractId, buyerCash!.contractId)}
-                    >
-                      {settling === item.contractId ? "Finalizing..." : "Finalize Atomic DvP"}
-                    </button>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button
+                        className="rounded-md bg-signal-mint px-3 py-1.5 text-sm font-semibold text-shell-950 disabled:opacity-50"
+                        disabled={settling === item.contractId || !canFinalizeDvP}
+                        onClick={() => handleFinalize(item.contractId, sellerAsset!.contractId, buyerCash!.contractId)}
+                      >
+                        {settling === item.contractId ? "Finalizing..." : "Finalize Atomic DvP"}
+                      </button>
+                      <button
+                        className="rounded-md border border-signal-amber bg-signal-amber/10 px-3 py-1.5 text-sm font-semibold text-signal-amber disabled:opacity-50"
+                        disabled={settling === item.contractId}
+                        onClick={() => handleSimpleFinalize(item.contractId)}
+                      >
+                        Simple Finalize (Audit Only)
+                      </button>
+                    </div>
                   )}
                   {!item.payload.settled && isIssuer && !canFinalizeDvP && (
                     <p className="mt-2 text-xs text-signal-coral">
-                      Missing eligible seller asset or buyer cash contract for atomic DvP finalization.
+                      Missing asset/cash for atomic DvP. Use "Simple Finalize" to record settlement without on-chain transfer.
                     </p>
                   )}
                   {actionError && settling === null && (

@@ -78,9 +78,26 @@ Streaming log table showing agent decision history.
 |---|---|---|
 | `VITE_JSON_API_URL` | `http://localhost:7575` | Base URL for the JSON API proxy |
 | `VITE_MARKET_API_URL` | `http://localhost:8090` | Market API URL (events + agent controls) |
+| `VITE_JSON_API_USE_INSECURE_TOKEN` | `true` | Generate dev JWTs in-browser for party-scoped access |
 | `VITE_POLL_INTERVAL_MS` | `3000` | Polling interval for contract queries (ms) |
 
 Create a `.env` file in the `ui/` directory or set these via shell exports before running.
+
+### Vercel Public Demo
+
+This UI includes serverless proxy routes in `ui/api/`:
+
+- `/api/ledger/*`
+- `/api/market/*`
+
+They forward to `BACKEND_PUBLIC_URL` at runtime. Set these in Vercel:
+
+- `BACKEND_PUBLIC_URL=https://<your-backend-host>`
+- `VITE_JSON_API_URL=/api/ledger`
+- `VITE_MARKET_API_URL=/api/market`
+- `VITE_JSON_API_USE_INSECURE_TOKEN=true`
+
+`ui/vercel.json` is configured to keep API routes intact and fallback all other routes to `index.html`.
 
 ---
 
