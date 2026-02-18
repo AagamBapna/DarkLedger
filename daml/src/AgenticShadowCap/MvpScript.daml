@@ -1,0 +1,110 @@
+module AgenticShadowCap.MvpScript where
+
+import Daml.Script
+
+import AgenticShadowCap.Market
+
+mvpBootstrap : Script ()
+mvpBootstrap = script do
+  seller <- allocatePartyWithHint "Seller" (PartyIdHint "Seller")
+  sellerAgent <- allocatePartyWithHint "SellerAgent" (PartyIdHint "SellerAgent")
+  buyer <- allocatePartyWithHint "Buyer" (PartyIdHint "Buyer")
+  buyerAgent <- allocatePartyWithHint "BuyerAgent" (PartyIdHint "BuyerAgent")
+  issuer <- allocatePartyWithHint "Company" (PartyIdHint "Company")
+
+  -- Issuer mints asset and cash holdings for the demo
+  sellerAssetCid <- submit issuer do
+    createCmd AssetHolding
+      with
+        owner = seller
+        issuer
+        instrument = "COMPANY-SERIES-A"
+        quantity = 5000.0
+
+  buyerCashCid <- submit issuer do
+    createCmd CashHolding
+      with
+        owner = buyer
+        issuer
+        currency = "USD"
+        amount = 500000.0
+
+  -- Seller creates a private trade intent
+  tradeIntentCid <- submit seller do
+    createCmd TradeIntent
+      with
+        issuer
+        seller
+        sellerAgent
+        instrument = "COMPANY-SERIES-A"
+        quantity = 1500.0
+        minPrice = 95.0
+
+  -- Agent reprices based on market signal
+  _ <- submit sellerAgent do
+    exerciseCmd tradeIntentCid UpdatePrice with newMinPrice = 97.5
+
+  -- Agent logs a decision
+  _ <- submit sellerAgent do
+    createCmd AgentDecisionLog
+      with
+        agent = sellerAgent
+        owner = seller
+        instrument = "COMPANY-SERIES-A"
+        decision = "reprice"
+        reasoning = "Elevated volatility: slight floor reduction to improve fill probability"
+        timestamp = "2026-02-18T00:00:00Z"
+        marketContext = "volatility=0.34 news=neutral"
+
+  -- Discovery phase: agents post blind signals (no price/volume)
+  sellInterestCid <- submit sellerAgent do
+    createCmd DiscoveryInterest
+      with
+        issuer
+        owner = seller
+        postingAgent = sellerAgent
+        instrument = "COMPANY-SERIES-A"
+        side = Sell
+        strategyTag = "PASSIVE_LIQUIDITY"
+
+  buyInterestCid <- submit buyerAgent do
+    createCmd DiscoveryInterest
+      with
+        issuer
+        owner = buyer
+        postingAgent = buyerAgent
+        instrument = "COMPANY-SERIES-A"
+        side = Buy
+        strategyTag = "ROFR_ELIGIBLE"
+
+  -- Issuer matches opposite interests -> private negotiation channel
+  negotiationCid <- submit issuer do
+    exerciseCmd sellInterestCid MatchWith with counterpartyCid = buyInterestCid
+
+  -- Seller agent submits terms
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid SubmitSellerTerms with qty = 1200.0, unitPrice = 101.5
+
+  -- Buyer agent accepts
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid AcceptByBuyer
+
+  -- Seller agent accepts
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid AcceptBySeller
+
+  -- Issuer approves (ROFR/compliance gate)
+  negotiationCid <- submit issuer do
+    exerciseCmd negotiationCid ApproveMatch
+
+  -- Issuer starts settlement
+  settlementCid <- submit issuer do
+    exerciseCmd negotiationCid StartSettlement
+
+  -- Issuer finalizes with DvP (real asset + cash atomic swap)
+  _ <- submit issuer do
+    exerciseCmd settlementCid FinalizeSettlement with
+      sellerAssetCid = sellerAssetCid
+      buyerCashCid = buyerCashCid
+
+  pure ()

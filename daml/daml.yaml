@@ -1,0 +1,16 @@
+sdk-version: 2.10.3
+name: agentic-shadow-cap
+version: 0.1.0
+source: src
+parties:
+  - Seller
+  - SellerAgent
+  - Buyer
+  - BuyerAgent
+  - Company
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+init-script: AgenticShadowCap.MvpScript:mvpBootstrap
+start-navigator: false

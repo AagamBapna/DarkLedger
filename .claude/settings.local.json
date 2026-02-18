@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(daml version:*)",
+      "Bash(pip3 list:*)"
+    ]
+  }
+}

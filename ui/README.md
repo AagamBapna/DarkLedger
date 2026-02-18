@@ -1,0 +1,141 @@
+# Agentic Shadow-Cap Dashboard
+
+React 18 + Vite + Tailwind CSS dashboard for the Agentic Shadow-Cap dark pool.
+
+---
+
+## Architecture
+
+The dashboard implements a **perspective-based architecture**: every panel is scoped to the currently selected party and their Canton participant node. There is no global order book, no shared depth chart, and no pooled liquidity view. This mirrors the on-ledger privacy model — you only see what your party is authorized to see.
+
+```
+┌────────────────────────────────────────────────┐
+│  App Shell                                      │
+│  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │ Party       │  │ Connectivity Status      │  │
+│  │ Selector    │  │ (Ledger API + Agent)     │  │
+│  └─────────────┘  └─────────────────────────┘  │
+│                                                  │
+│  ┌──────────────────────────────────────────┐   │
+│  │              View Router                  │   │
+│  │  ┌──────────┬──────────┬──────────┬────┐ │   │
+│  │  │  Owner   │  Market  │Compliance│Logs│ │   │
+│  │  │  View    │  View    │  View    │View│ │   │
+│  │  └──────────┴──────────┴──────────┴────┘ │   │
+│  └──────────────────────────────────────────┘   │
+│                       │                          │
+│              Daml JSON API Client                │
+│              (ledgerClient.ts)                    │
+│                       │                          │
+│              Nginx Proxy (:7575)                  │
+│              X-Ledger-Party routing               │
+└────────────────────────────────────────────────┘
+```
+
+---
+
+## Views
+
+### Owner View
+
+The default view for `Seller`, `SellerAgent`, `Buyer`, and `BuyerAgent` parties.
+
+- **Private Holdings**: Asset positions and available quantities
+- **Active Trade Intents**: Instrument, quantity, `minPrice`, last agent update timestamp
+- **Negotiation Status**: Active `PrivateNegotiation` contracts (if any)
+- **Agent Timeline**: History of agent actions (`UpdatePrice`, `SubmitSellerTerms`, `AcceptBySeller`)
+- **Manual Controls**: Override `minPrice`, toggle agent auto-reprice
+
+### Market View
+
+Intentionally minimal — reflects the zero-knowledge stance of the dark pool.
+
+- **Before match**: Full-screen placeholder: *"No discoverable market data"* with explanation that discovery uses private interest signaling only
+- **On match**: Notification banner with instrument and pseudonymized counterparty, CTA to open the negotiation channel
+
+### Compliance View
+
+Available to the `Company` (issuer) party.
+
+- **Pending Negotiations**: Queue of `PrivateNegotiation` contracts with acceptance status
+- **ROFR Action**: `ApproveMatch` button with optional audit memo
+- **Settlement Monitor**: `TradeSettlement` contracts and finalization status
+
+### Agent Logs View
+
+Streaming log table showing agent decision history.
+
+- **Source**: `market-feed`, `seller-agent`, `buyer-agent`, `ledger-event`
+- **Decision**: `repriced`, `skipped`, `submitted-choice`, `accepted`, `countered`
+- **Metadata**: Volatility, old/new price, contract ID
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `VITE_LEDGER_API_URL` | `http://localhost:7575` | Base URL for the JSON API proxy |
+| `VITE_POLL_INTERVAL_MS` | `3000` | Polling interval for contract queries (ms) |
+
+Create a `.env` file in the `ui/` directory or set these via shell exports before running.
+
+---
+
+## Development
+
+### Install dependencies
+
+```bash
+npm install
+```
+
+### Start development server
+
+```bash
+npm run dev
+```
+
+Opens at [http://localhost:5173](http://localhost:5173) with hot module replacement.
+
+### Type check and build for production
+
+```bash
+npm run build
+```
+
+### Preview production build
+
+```bash
+npm run preview
+```
+
+---
+
+## Key Files
+
+| File | Purpose |
+|---|---|
+| `src/App.tsx` | Root component, view routing |
+| `src/context/PartyContext.tsx` | Party selection state management |
+| `src/lib/ledgerClient.ts` | Daml JSON API client with party-header injection |
+| `src/views/OwnerView.tsx` | Private holdings + trade intents |
+| `src/views/MarketView.tsx` | Zero-knowledge market view |
+| `src/views/ComplianceView.tsx` | Issuer ROFR / settlement monitor |
+| `src/views/AgentLogsView.tsx` | Agent decision log stream |
+| `src/components/MatchFoundToast.tsx` | Match notification banner |
+| `src/types/contracts.ts` | TypeScript type definitions for Daml contracts |
+
+---
+
+## Proxy Configuration
+
+The UI sends all ledger API requests through the Nginx proxy at `:7575`. The proxy reads the `X-Ledger-Party` header to route to the correct Canton participant:
+
+| Party | Routed To |
+|---|---|
+| `Seller`, `SellerAgent` | Seller Participant (`:5013`) |
+| `Buyer`, `BuyerAgent` | Buyer Participant (`:5023`) |
+| `Company` | Issuer Participant (`:5033`) |
+
+The `ledgerClient.ts` module automatically sets this header based on the currently selected party in `PartyContext`.

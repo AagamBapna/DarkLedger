@@ -1,0 +1,456 @@
+module AgenticShadowCap.Tests where
+
+import Daml.Script
+import DA.Assert ((===))
+
+import AgenticShadowCap.Market
+
+type Parties = (Party, Party, Party, Party, Party)
+
+setupParties : Script Parties
+setupParties = do
+  seller <- allocatePartyWithHint "Seller" (PartyIdHint "seller")
+  sellerAgent <- allocatePartyWithHint "SellerAgent" (PartyIdHint "seller-agent")
+  buyer <- allocatePartyWithHint "Buyer" (PartyIdHint "buyer")
+  buyerAgent <- allocatePartyWithHint "BuyerAgent" (PartyIdHint "buyer-agent")
+  issuer <- allocatePartyWithHint "Company" (PartyIdHint "company")
+  pure (seller, sellerAgent, buyer, buyerAgent, issuer)
+
+createMatchedNegotiation : Party -> Party -> Party -> Party -> Party -> Text -> Script (ContractId PrivateNegotiation)
+createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer instrument = do
+  sellInterestCid <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = seller; postingAgent = sellerAgent
+      instrument; side = Sell; strategyTag = "TEST_SELL"
+
+  buyInterestCid <- submit buyerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = buyer; postingAgent = buyerAgent
+      instrument; side = Buy; strategyTag = "TEST_BUY"
+
+  submit issuer do
+    exerciseCmd sellInterestCid MatchWith with counterpartyCid = buyInterestCid
+
+-- ============================================================
+-- Happy-path: full lifecycle through SimpleFinalizeSettlement
+-- ============================================================
+
+testHappyPathFullLifecycle : Script ()
+testHappyPathFullLifecycle = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  _ <- submit seller do
+    createCmd TradeIntent with
+      issuer; seller; sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = 1500.0
+      minPrice = 95.0
+
+  sellInterestCid <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = seller; postingAgent = sellerAgent
+      instrument = "COMPANY-SERIES-A"; side = Sell
+      strategyTag = "PASSIVE_LIQUIDITY"
+
+  buyInterestCid <- submit buyerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = buyer; postingAgent = buyerAgent
+      instrument = "COMPANY-SERIES-A"; side = Buy
+      strategyTag = "ROFR_ELIGIBLE"
+
+  negotiationCid <- submit issuer do
+    exerciseCmd sellInterestCid MatchWith with counterpartyCid = buyInterestCid
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid SubmitSellerTerms with qty = 1200.0, unitPrice = 101.5
+
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid AcceptByBuyer
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid AcceptBySeller
+
+  negotiationCid <- submit issuer do
+    exerciseCmd negotiationCid ApproveMatch
+
+  settlementCid <- submit issuer do
+    exerciseCmd negotiationCid StartSettlement
+
+  _ <- submit issuer do
+    exerciseCmd settlementCid SimpleFinalizeSettlement
+
+  audits <- query @TradeAuditRecord issuer
+  length audits === 1
+
+  pure ()
+
+-- ============================================================
+-- Happy-path: full DvP with AssetHolding / CashHolding transfer
+-- ============================================================
+
+testHappyPathWithDvP : Script ()
+testHappyPathWithDvP = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  assetCid <- submit issuer do
+    createCmd AssetHolding with
+      owner = seller; issuer
+      instrument = "COMPANY-SERIES-A"; quantity = 2000.0
+
+  cashCid <- submit issuer do
+    createCmd CashHolding with
+      owner = buyer; issuer
+      currency = "USD"; amount = 200000.0
+
+  negotiationCid <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid SubmitSellerTerms with qty = 1000.0, unitPrice = 100.0
+
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid AcceptByBuyer
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid AcceptBySeller
+
+  negotiationCid <- submit issuer do
+    exerciseCmd negotiationCid ApproveMatch
+
+  settlementCid <- submit issuer do
+    exerciseCmd negotiationCid StartSettlement
+
+  _ <- submit issuer do
+    exerciseCmd settlementCid FinalizeSettlement with
+      sellerAssetCid = assetCid
+      buyerCashCid = cashCid
+
+  buyerAssets <- query @AssetHolding buyer
+  assertMsg "Buyer should hold transferred asset" (not (null buyerAssets))
+
+  sellerCash <- query @CashHolding seller
+  assertMsg "Seller should hold received cash" (not (null sellerCash))
+
+  sellerRemainder <- query @AssetHolding seller
+  assertMsg "Seller should hold remainder asset" (not (null sellerRemainder))
+
+  buyerChange <- query @CashHolding buyer
+  assertMsg "Buyer should hold change cash" (not (null buyerChange))
+
+  pure ()
+
+-- ============================================================
+-- Privacy: TradeIntent is invisible to Buyer / BuyerAgent
+-- ============================================================
+
+testTradeIntentInvisibleToBuyer : Script ()
+testTradeIntentInvisibleToBuyer = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  _ <- submit seller do
+    createCmd TradeIntent with
+      issuer; seller; sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = 500.0; minPrice = 90.0
+
+  buyerView <- query @TradeIntent buyer
+  length buyerView === 0
+
+  buyerAgentView <- query @TradeIntent buyerAgent
+  length buyerAgentView === 0
+
+  issuerView <- query @TradeIntent issuer
+  assertMsg "Issuer should see the TradeIntent" (not (null issuerView))
+
+  pure ()
+
+-- ============================================================
+-- Privacy: PrivateNegotiation invisible to unrelated party
+-- ============================================================
+
+testNegotiationInvisibleToOutsider : Script ()
+testNegotiationInvisibleToOutsider = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+  outsider <- allocatePartyWithHint "Outsider" (PartyIdHint "outsider")
+
+  _ <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
+
+  outsiderView <- query @PrivateNegotiation outsider
+  length outsiderView === 0
+
+  issuerView <- query @PrivateNegotiation issuer
+  assertMsg "Issuer should see the negotiation" (not (null issuerView))
+
+  pure ()
+
+-- ============================================================
+-- Validation: TradeIntent with quantity = 0 fails
+-- ============================================================
+
+testTradeIntentZeroQuantityFails : Script ()
+testTradeIntentZeroQuantityFails = script do
+  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+
+  submitMustFail seller do
+    createCmd TradeIntent with
+      issuer; seller; sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = 0.0; minPrice = 95.0
+
+  pure ()
+
+-- ============================================================
+-- Validation: TradeIntent with negative quantity fails
+-- ============================================================
+
+testTradeIntentNegativeQuantityFails : Script ()
+testTradeIntentNegativeQuantityFails = script do
+  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+
+  submitMustFail seller do
+    createCmd TradeIntent with
+      issuer; seller; sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = -100.0; minPrice = 95.0
+
+  pure ()
+
+-- ============================================================
+-- Validation: TradeIntent with zero price fails
+-- ============================================================
+
+testTradeIntentZeroPriceFails : Script ()
+testTradeIntentZeroPriceFails = script do
+  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+
+  submitMustFail seller do
+    createCmd TradeIntent with
+      issuer; seller; sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = 1000.0; minPrice = 0.0
+
+  pure ()
+
+-- ============================================================
+-- Validation: ApproveMatch before both sides accept fails
+-- ============================================================
+
+testApproveMatchBeforeBothAcceptFails : Script ()
+testApproveMatchBeforeBothAcceptFails = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  negotiationCid <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid SubmitSellerTerms with qty = 500.0, unitPrice = 100.0
+
+  submitMustFail issuer do
+    exerciseCmd negotiationCid ApproveMatch
+
+  pure ()
+
+-- ============================================================
+-- Validation: ApproveMatch with no terms at all fails
+-- ============================================================
+
+testApproveMatchNoTermsFails : Script ()
+testApproveMatchNoTermsFails = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  negotiationCid <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
+
+  submitMustFail issuer do
+    exerciseCmd negotiationCid ApproveMatch
+
+  pure ()
+
+-- ============================================================
+-- Validation: MatchWith same-side interests (both Sell) fails
+-- ============================================================
+
+testMatchSameSideFails : Script ()
+testMatchSameSideFails = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  sellInterest1 <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = seller; postingAgent = sellerAgent
+      instrument = "COMPANY-SERIES-A"; side = Sell
+      strategyTag = "WHISPER_A"
+
+  sellInterest2 <- submit buyerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = buyer; postingAgent = buyerAgent
+      instrument = "COMPANY-SERIES-A"; side = Sell
+      strategyTag = "WHISPER_B"
+
+  submitMustFail issuer do
+    exerciseCmd sellInterest1 MatchWith with counterpartyCid = sellInterest2
+
+  pure ()
+
+-- ============================================================
+-- Validation: Self-matching (same postingAgent) fails
+-- ============================================================
+
+testSelfMatchingFails : Script ()
+testSelfMatchingFails = script do
+  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+
+  sellInterestCid <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = seller; postingAgent = sellerAgent
+      instrument = "COMPANY-SERIES-A"; side = Sell
+      strategyTag = "SELF_SELL"
+
+  buyInterestCid <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer; owner = seller; postingAgent = sellerAgent
+      instrument = "COMPANY-SERIES-A"; side = Buy
+      strategyTag = "SELF_BUY"
+
+  submitMustFail issuer do
+    exerciseCmd sellInterestCid MatchWith with counterpartyCid = buyInterestCid
+
+  pure ()
+
+-- ============================================================
+-- Repricing: UpdatePrice changes minPrice
+-- ============================================================
+
+testUpdatePriceRepricing : Script ()
+testUpdatePriceRepricing = script do
+  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+
+  tradeIntentCid <- submit seller do
+    createCmd TradeIntent with
+      issuer; seller; sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = 1000.0; minPrice = 95.0
+
+  newIntentCid <- submit sellerAgent do
+    exerciseCmd tradeIntentCid UpdatePrice with newMinPrice = 102.5
+
+  Some newIntent <- queryContractId sellerAgent newIntentCid
+  newIntent.minPrice === 102.5
+  newIntent.quantity === 1000.0
+  newIntent.instrument === "COMPANY-SERIES-A"
+
+  pure ()
+
+-- ============================================================
+-- Repricing: UpdatePrice with zero price fails
+-- ============================================================
+
+testUpdatePriceZeroFails : Script ()
+testUpdatePriceZeroFails = script do
+  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+
+  tradeIntentCid <- submit seller do
+    createCmd TradeIntent with
+      issuer; seller; sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = 1000.0; minPrice = 95.0
+
+  submitMustFail sellerAgent do
+    exerciseCmd tradeIntentCid UpdatePrice with newMinPrice = 0.0
+
+  pure ()
+
+-- ============================================================
+-- Rejection: RejectBySeller archives negotiation mid-flight
+-- ============================================================
+
+testRejectBySellerArchivesNegotiation : Script ()
+testRejectBySellerArchivesNegotiation = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  negotiationCid <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid SubmitSellerTerms with qty = 1000.0, unitPrice = 100.0
+
+  submit sellerAgent do
+    exerciseCmd negotiationCid RejectBySeller
+
+  result <- queryContractId sellerAgent negotiationCid
+  result === None
+
+  pure ()
+
+-- ============================================================
+-- Rejection: RejectByBuyer archives negotiation
+-- ============================================================
+
+testRejectByBuyerArchivesNegotiation : Script ()
+testRejectByBuyerArchivesNegotiation = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  negotiationCid <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid SubmitSellerTerms with qty = 500.0, unitPrice = 95.0
+
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid AcceptByBuyer
+
+  submit buyerAgent do
+    exerciseCmd negotiationCid RejectByBuyer
+
+  result <- queryContractId buyerAgent negotiationCid
+  result === None
+
+  pure ()
+
+-- ============================================================
+-- StartSettlement before issuer approval fails
+-- ============================================================
+
+testStartSettlementBeforeApprovalFails : Script ()
+testStartSettlementBeforeApprovalFails = script do
+  (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
+
+  negotiationCid <- createMatchedNegotiation seller sellerAgent buyer buyerAgent issuer "COMPANY-SERIES-A"
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid SubmitSellerTerms with qty = 1000.0, unitPrice = 100.0
+
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid AcceptByBuyer
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid AcceptBySeller
+
+  submitMustFail issuer do
+    exerciseCmd negotiationCid StartSettlement
+
+  pure ()
+
+-- ============================================================
+-- Asset holding split and transfer
+-- ============================================================
+
+testAssetSplitAndTransfer : Script ()
+testAssetSplitAndTransfer = script do
+  (seller, _sellerAgent, buyer, _buyerAgent, issuer) <- setupParties
+
+  assetCid <- submit issuer do
+    createCmd AssetHolding with
+      owner = seller; issuer
+      instrument = "COMPANY-SERIES-A"; quantity = 5000.0
+
+  (splitCid, remainderCid) <- submit seller do
+    exerciseCmd assetCid SplitAsset with splitQty = 2000.0
+
+  Some split <- queryContractId seller splitCid
+  split.quantity === 2000.0
+
+  Some remainder <- queryContractId seller remainderCid
+  remainder.quantity === 3000.0
+
+  _ <- submit issuer do
+    exerciseCmd splitCid TransferAsset with newOwner = buyer
+
+  buyerAssets <- query @AssetHolding buyer
+  assertMsg "Buyer should hold transferred portion" (not (null buyerAssets))
+
+  pure ()

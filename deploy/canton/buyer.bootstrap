@@ -1,0 +1,3 @@
+buyerParticipant.domains.connect(domain0.defaultDomainConnection)
+buyerParticipant.parties.enable("Buyer", waitForDomain = DomainChoice.All)
+buyerParticipant.parties.enable("BuyerAgent", waitForDomain = DomainChoice.All)

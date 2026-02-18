@@ -1,0 +1,2 @@
+issuerParticipant.domains.connect(domain0.defaultDomainConnection)
+issuerParticipant.parties.enable("Company", waitForDomain = DomainChoice.All)

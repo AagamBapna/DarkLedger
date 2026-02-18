@@ -1,0 +1,174 @@
+services:
+  domain:
+    image: europe-docker.pkg.dev/da-images/public/docker/canton-base:3.4.8
+    container_name: shadowcap-domain
+    volumes:
+      - ./canton/domain.conf:/app/app.conf:ro
+    ports:
+      - "5018:5018" # domain public API
+      - "5019:5019" # domain admin API
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':139A' /proc/net/tcp /proc/net/tcp6"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  seller-participant:
+    image: europe-docker.pkg.dev/da-images/public/docker/canton-base:3.4.8
+    container_name: shadowcap-seller
+    depends_on:
+      domain:
+        condition: service_healthy
+    volumes:
+      - ./canton/seller-participant.conf:/app/app.conf:ro
+      - ./canton/seller.bootstrap:/app/bootstrap.sc:ro
+    ports:
+      - "5011:5011" # Seller ledger API
+      - "5012:5012" # Seller admin API
+      - "5013:5013" # Seller HTTP ledger API
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':1393' /proc/net/tcp /proc/net/tcp6"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  buyer-participant:
+    image: europe-docker.pkg.dev/da-images/public/docker/canton-base:3.4.8
+    container_name: shadowcap-buyer
+    depends_on:
+      domain:
+        condition: service_healthy
+    volumes:
+      - ./canton/buyer-participant.conf:/app/app.conf:ro
+      - ./canton/buyer.bootstrap:/app/bootstrap.sc:ro
+    ports:
+      - "5021:5021" # Buyer ledger API
+      - "5022:5022" # Buyer admin API
+      - "5023:5023" # Buyer HTTP ledger API
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':139D' /proc/net/tcp /proc/net/tcp6"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  issuer-participant:
+    image: europe-docker.pkg.dev/da-images/public/docker/canton-base:3.4.8
+    container_name: shadowcap-issuer
+    depends_on:
+      domain:
+        condition: service_healthy
+    volumes:
+      - ./canton/issuer-participant.conf:/app/app.conf:ro
+      - ./canton/issuer.bootstrap:/app/bootstrap.sc:ro
+    ports:
+      - "5031:5031" # Issuer ledger API
+      - "5032:5032" # Issuer admin API
+      - "5033:5033" # Issuer HTTP ledger API
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':13A7' /proc/net/tcp /proc/net/tcp6"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  seller-agent:
+    image: python:3.12-slim
+    container_name: shadowcap-seller-agent
+    profiles: ["agent"]
+    depends_on:
+      seller-participant:
+        condition: service_healthy
+    working_dir: /workspace
+    command:
+      [
+        "sh",
+        "-c",
+        "pip install --no-cache-dir -r agent/requirements.txt && python agent/seller_agent.py",
+      ]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /workspace/agent
+      DAML_LEDGER_URL: http://seller-participant:5011
+      SELLER_AGENT_PARTY: SellerAgent
+      SELLER_PARTY: Seller
+      TRADE_INTENT_TEMPLATE: AgenticShadowCap.Market:TradeIntent
+      DISCOVERY_TEMPLATE: AgenticShadowCap.Market:DiscoveryInterest
+      NEGOTIATION_TEMPLATE: AgenticShadowCap.Market:PrivateNegotiation
+      MARKET_FEED_PATH: /workspace/agent/mock_market_feed.json
+      AGENT_POLL_SECONDS: "5"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ../:/workspace
+
+  buyer-agent:
+    image: python:3.12-slim
+    container_name: shadowcap-buyer-agent
+    profiles: ["agent"]
+    depends_on:
+      buyer-participant:
+        condition: service_healthy
+    working_dir: /workspace
+    command:
+      [
+        "sh",
+        "-c",
+        "pip install --no-cache-dir -r agent/requirements.txt && python agent/buyer_agent.py",
+      ]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /workspace/agent
+      DAML_LEDGER_URL: http://buyer-participant:5021
+      BUYER_AGENT_PARTY: BuyerAgent
+      BUYER_PARTY: Buyer
+      TARGET_INSTRUMENT: COMPANY-SERIES-A
+      DISCOVERY_TEMPLATE: AgenticShadowCap.Market:DiscoveryInterest
+      NEGOTIATION_TEMPLATE: AgenticShadowCap.Market:PrivateNegotiation
+      MARKET_FEED_PATH: /workspace/agent/mock_market_feed.json
+      AGENT_POLL_SECONDS: "5"
+      BUYER_MAX_PRICE: "110.00"
+      BUYER_DEFAULT_QTY: "1000.00"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ../:/workspace
+
+  market-api:
+    image: python:3.12-slim
+    container_name: shadowcap-market-api
+    profiles: ["agent"]
+    working_dir: /workspace
+    command:
+      [
+        "sh",
+        "-c",
+        "pip install --no-cache-dir -r agent/requirements.txt && uvicorn agent.market_api:app --host 0.0.0.0 --port 8090",
+      ]
+    environment:
+      MARKET_FEED_PATH: /workspace/agent/mock_market_feed.json
+    ports:
+      - "8090:8090"
+    volumes:
+      - ../:/workspace
+
+  json-api-proxy:
+    image: nginx:1.27-alpine
+    container_name: shadowcap-json-api-proxy
+    depends_on:
+      seller-participant:
+        condition: service_healthy
+      buyer-participant:
+        condition: service_healthy
+      issuer-participant:
+        condition: service_healthy
+    ports:
+      - "7575:7575"
+    healthcheck:
+      test: ["CMD-SHELL", "grep -qi ':1D97' /proc/net/tcp /proc/net/tcp6"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - ./json-api/nginx.conf:/etc/nginx/nginx.conf:ro
