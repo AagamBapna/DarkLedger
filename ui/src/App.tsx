@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MatchFoundToast } from "./components/MatchFoundToast";
-import { usePartyContext, partyOptions } from "./context/PartyContext";
+import { usePartyContext } from "./context/PartyContext";
 import {
   TEMPLATE_IDS,
   exerciseChoice,
@@ -34,17 +34,22 @@ interface MatchToastState {
 
 const POLL_INTERVAL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS ?? "3000");
 
-function participantLabelFor(party: string): string {
-  if (party === "Seller" || party === "SellerAgent") {
-    return "seller-node:5011";
+const JSON_API_URL = import.meta.env.VITE_JSON_API_URL ?? "http://localhost:7575";
+
+function participantLabelFor(party: string, networkMode: string): string {
+  if (party === "Public") return "none (unauthorized)";
+  if (networkMode === "local") {
+    if (party === "Seller" || party === "SellerAgent") return "seller-node:5011";
+    if (party === "Buyer" || party === "BuyerAgent") return "buyer-node:5021";
+    return "issuer-node:5031";
   }
-  if (party === "Buyer" || party === "BuyerAgent") {
-    return "buyer-node:5021";
+  // For devnet/testnet/mainnet, show the gateway URL
+  try {
+    const url = new URL(JSON_API_URL);
+    return `${url.host} (${networkMode})`;
+  } catch {
+    return `gateway (${networkMode})`;
   }
-  if (party === "Public") {
-    return "none (unauthorized)";
-  }
-  return "issuer-node:5031";
 }
 
 function counterpartyPseudonym(
@@ -71,7 +76,7 @@ function agentRoleForParty(party: string): "seller" | "buyer" | null {
 }
 
 export default function App() {
-  const { party, setParty, autoReprice, setAutoReprice, logs, addLog, clearLogs } = usePartyContext();
+  const { party, setParty, autoReprice, setAutoReprice, logs, addLog, clearLogs, availableParties, networkMode } = usePartyContext();
 
   const [activeView, setActiveView] = useState<ViewKey>("owner");
   const [tradeIntents, setTradeIntents] = useState<Array<ContractRecord<TradeIntentPayload>>>([]);
@@ -322,7 +327,7 @@ export default function App() {
               <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Agentic Shadow-Cap</p>
               <h1 className="mt-1 text-2xl font-semibold text-signal-mint">Dark Pool Agent Console</h1>
               <p className="mt-1 text-sm text-signal-slate">
-                Participant endpoint: {participantLabelFor(party)}
+                Participant endpoint: {participantLabelFor(party, networkMode)}
               </p>
             </div>
             <div className="flex flex-col gap-2 md:items-end">
@@ -331,9 +336,9 @@ export default function App() {
                 <select
                   className="ml-2 rounded-md border border-shell-700 bg-shell-950 px-2 py-1 text-white"
                   value={party}
-                  onChange={(event) => setParty(event.target.value as (typeof partyOptions)[number])}
+                  onChange={(event) => setParty(event.target.value)}
                 >
-                  {partyOptions.map((entry) => (
+                  {availableParties.map((entry) => (
                     <option key={entry} value={entry}>
                       {entry}
                     </option>

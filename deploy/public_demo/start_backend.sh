@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
-if ! command -v daml >/dev/null 2>&1; then
-  echo "daml CLI is required but not found on PATH"
-  echo "Install Daml SDK first, then rerun this script."
+if ! command -v dpm >/dev/null 2>&1; then
+  echo "dpm is required but not found on PATH"
+  echo "Install dpm first, then rerun this script."
   exit 1
 fi
 

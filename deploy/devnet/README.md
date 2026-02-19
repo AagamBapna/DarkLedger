@@ -45,7 +45,8 @@ This will:
 ## Requirements
 
 - **Docker Desktop** running with **8GB+ memory** allocated
-- **Daml SDK 3.4.x**
+- **dpm**
+- **Java 17+** (required by Daml tooling)
 - **Python 3.10+** (for agents)
 - **Node.js 18+** (for React UI)
 - **~2GB disk space** for Docker images

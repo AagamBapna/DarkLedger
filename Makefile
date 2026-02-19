@@ -1,4 +1,4 @@
-.PHONY: build up down parties upload seed controls-reset agents agents-stop ui ui-stop demo clean status test test-daml test-e2e test-lifecycle devnet devnet-demo devnet-down canton-network-bootstrap canton-network-demo demo-web-venv demo-web-backend
+.PHONY: build dpm-build dpm-test up down parties upload seed controls-reset agents agents-stop ui ui-stop sandbox demo demo-docker demo-stop clean status test test-daml test-e2e test-lifecycle devnet devnet-demo devnet-down canton-network-bootstrap canton-network-demo demo-web-venv demo-web-backend dpm-install
 
 DAML_DIR   := daml
 DEPLOY_DIR := deploy
@@ -7,15 +7,91 @@ UI_DIR     := ui
 DAR_FILE   := $(DAML_DIR)/.daml/dist/agentic-shadow-cap-0.1.0.dar
 PYTHON     := python3
 
+# Network mode: local | devnet | testnet | mainnet
+CANTON_NETWORK_MODE ?= local
+
+# Configurable party aliases
+SELLER_PARTY       ?= Seller
+SELLER_AGENT_PARTY ?= SellerAgent
+BUYER_PARTY        ?= Buyer
+BUYER_AGENT_PARTY  ?= BuyerAgent
+ISSUER_PARTY       ?= Company
+
+# Configurable instrument defaults
+DEMO_INSTRUMENT    ?= COMPANY-SERIES-A
+TARGET_INSTRUMENT  ?= $(DEMO_INSTRUMENT)
+
+# Configurable ports (local Docker mode)
 SELLER_PORT := 5011
 BUYER_PORT  := 5021
 ISSUER_PORT := 5031
+SELLER_HTTP_PORT := 5013
+BUYER_HTTP_PORT  := 5023
+ISSUER_HTTP_PORT := 5033
+CANTON_VERSION ?= 0.5.10
+
+# Prefer dpm when available, but keep compatibility with daml assistant.
+define ensure_daml_cmd
+DAML_CMD=""; \
+if command -v dpm >/dev/null 2>&1; then \
+	DAML_CMD="dpm"; \
+elif [ -x "$$HOME/.dpm/bin/dpm" ]; then \
+	DAML_CMD="$$HOME/.dpm/bin/dpm"; \
+elif command -v daml >/dev/null 2>&1; then \
+	DAML_CMD="daml"; \
+fi; \
+if [ -z "$$DAML_CMD" ]; then \
+	echo "ERROR: neither dpm nor daml is installed."; \
+	echo "Run 'make dpm-install' or install Daml SDK 3.4.x."; \
+	exit 127; \
+fi
+endef
+
+define ensure_dpm_cmd
+DPM_CMD=""; \
+if command -v dpm >/dev/null 2>&1; then \
+	DPM_CMD="dpm"; \
+elif [ -x "$$HOME/.dpm/bin/dpm" ]; then \
+	DPM_CMD="$$HOME/.dpm/bin/dpm"; \
+fi; \
+if [ -z "$$DPM_CMD" ]; then \
+	echo "ERROR: dpm is required for this target but is not installed."; \
+	echo "Run 'make dpm-install' and ensure $$HOME/.dpm/bin is on PATH."; \
+	exit 127; \
+fi
+endef
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 build:
 	@echo "==> Building Daml package..."
-	cd $(DAML_DIR) && daml build
+	@$(ensure_daml_cmd); \
+		echo "==> Using $$DAML_CMD"; \
+		cd $(DAML_DIR) && $$DAML_CMD build
 	@echo "==> DAR built: $(DAR_FILE)"
+
+dpm-build:
+	@echo "==> Building Daml package with dpm..."
+	@$(ensure_dpm_cmd); \
+		echo "==> Using $$DPM_CMD"; \
+		cd $(DAML_DIR) && $$DPM_CMD build
+	@echo "==> DAR built: $(DAR_FILE)"
+
+# ─── dpm (Digital Asset Package Manager) ─────────────────────────────────────
+dpm-install:
+	@echo "==> Installing dpm (Digital Asset Package Manager)..."
+	@command -v dpm >/dev/null 2>&1 && { echo "  dpm already installed:"; dpm --version 2>/dev/null || true; } || { \
+		echo "  Installing dpm..."; \
+		curl -fsSL https://get.digitalasset.com/install/install.sh | sh || { \
+			echo "  ERROR: dpm auto-install failed. Install manually: curl https://get.digitalasset.com/install/install.sh | sh"; \
+			exit 1; \
+		}; \
+		command -v dpm >/dev/null 2>&1 || [ -x "$$HOME/.dpm/bin/dpm" ] || { \
+			echo "  ERROR: dpm installed but is not on PATH. Add $$HOME/.dpm/bin to PATH."; \
+			exit 1; \
+		}; \
+		echo "  dpm installed:"; \
+		(command -v dpm >/dev/null 2>&1 && dpm --version 2>/dev/null || "$$HOME/.dpm/bin/dpm" --version 2>/dev/null) || true; \
+	}
 
 # ─── Docker Compose ──────────────────────────────────────────────────────────
 up:
@@ -40,14 +116,22 @@ parties:
 # ─── DAR Upload ──────────────────────────────────────────────────────────────
 upload:
 	@echo "==> Uploading DAR to all participant nodes..."
-	daml ledger upload-dar $(DAR_FILE) --host localhost --port $(SELLER_PORT)
-	daml ledger upload-dar $(DAR_FILE) --host localhost --port $(BUYER_PORT)
-	daml ledger upload-dar $(DAR_FILE) --host localhost --port $(ISSUER_PORT)
+	$(PYTHON) $(DEPLOY_DIR)/scripts/upload_dar.py \
+		--dar $(DAR_FILE) \
+		--url http://localhost:$(SELLER_HTTP_PORT)/v2/packages \
+		--url http://localhost:$(BUYER_HTTP_PORT)/v2/packages \
+		--url http://localhost:$(ISSUER_HTTP_PORT)/v2/packages
 	@echo "==> DAR uploaded to all nodes."
 
 seed:
 	@echo "==> Seeding demo contracts (holdings + trade intent)..."
-	python3 $(DEPLOY_DIR)/scripts/seed_demo.py
+	CANTON_NETWORK_MODE=$(CANTON_NETWORK_MODE) \
+		ISSUER_PARTY=$(ISSUER_PARTY) \
+		SELLER_PARTY=$(SELLER_PARTY) \
+		SELLER_AGENT_PARTY=$(SELLER_AGENT_PARTY) \
+		BUYER_PARTY=$(BUYER_PARTY) \
+		DEMO_INSTRUMENT=$(DEMO_INSTRUMENT) \
+		python3 $(DEPLOY_DIR)/scripts/seed_demo.py
 	@echo "==> Seed complete."
 
 controls-reset:
@@ -59,17 +143,21 @@ agents:
 	@echo "==> Installing Python dependencies..."
 	$(PYTHON) -m pip install -q -r $(AGENT_DIR)/requirements.txt
 	@echo "==> Starting seller agent..."
-	PYTHONUNBUFFERED=1 DAML_LEDGER_URL=http://localhost:$(SELLER_PORT) \
-		SELLER_AGENT_PARTY=SellerAgent \
-		SELLER_PARTY=Seller \
+	PYTHONUNBUFFERED=1 \
+		CANTON_NETWORK_MODE=$(CANTON_NETWORK_MODE) \
+		DAML_LEDGER_URL=http://localhost:$(SELLER_PORT) \
+		SELLER_AGENT_PARTY=$(SELLER_AGENT_PARTY) \
+		SELLER_PARTY=$(SELLER_PARTY) \
 		MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
 		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
 		$(PYTHON) $(AGENT_DIR)/seller_agent.py &
 	@echo "==> Starting buyer agent..."
-	PYTHONUNBUFFERED=1 DAML_LEDGER_URL=http://localhost:$(BUYER_PORT) \
-		BUYER_AGENT_PARTY=BuyerAgent \
-		BUYER_PARTY=Buyer \
-		TARGET_INSTRUMENT=COMPANY-SERIES-A \
+	PYTHONUNBUFFERED=1 \
+		CANTON_NETWORK_MODE=$(CANTON_NETWORK_MODE) \
+		DAML_LEDGER_URL=http://localhost:$(BUYER_PORT) \
+		BUYER_AGENT_PARTY=$(BUYER_AGENT_PARTY) \
+		BUYER_PARTY=$(BUYER_PARTY) \
+		TARGET_INSTRUMENT=$(TARGET_INSTRUMENT) \
 		MARKET_FEED_PATH=$(AGENT_DIR)/mock_market_feed.json \
 		AGENT_CONTROL_PATH=$(AGENT_DIR)/agent_controls.json \
 		$(PYTHON) $(AGENT_DIR)/buyer_agent.py &
@@ -89,7 +177,9 @@ agents-stop:
 # ─── UI ──────────────────────────────────────────────────────────────────────
 ui:
 	@echo "==> Starting React dashboard..."
-	cd $(UI_DIR) && npm install && npm run dev &
+	cd $(UI_DIR) && npm install
+	@nohup sh -c "cd $(UI_DIR) && npm run dev -- --host 127.0.0.1 --port 5173" >/tmp/canton_ui.log 2>&1 &
+	@sleep 2
 	@echo "==> UI available at http://localhost:5173"
 
 ui-stop:
@@ -100,40 +190,77 @@ sandbox:
 	@echo "==> Starting local sandbox demo..."
 	$(MAKE) build
 	@echo "==> Starting Daml sandbox..."
-	cd $(DAML_DIR) && daml sandbox --port 6865 &
+	@$(ensure_daml_cmd); \
+		echo "==> Using $$DAML_CMD"; \
+		cd $(DAML_DIR) && $$DAML_CMD sandbox --port 6865 --dar .daml/dist/agentic-shadow-cap-0.1.0.dar &
 	@sleep 15
-	@echo "==> Uploading DAR to sandbox..."
-	daml ledger upload-dar $(DAR_FILE) --host localhost --port 6865
 	@echo "==> Running MvpScript..."
-	cd $(DAML_DIR) && daml script --dar .daml/dist/agentic-shadow-cap-0.1.0.dar \
-		--script-name AgenticShadowCap.MvpScript:mvpBootstrap \
-		--ledger-host localhost --ledger-port 6865 --wall-clock-time
+	@$(ensure_daml_cmd); \
+		echo "==> Using $$DAML_CMD"; \
+		if [ "$$DAML_CMD" = "dpm" ]; then \
+			cd $(DAML_DIR) && $$DAML_CMD script --dar .daml/dist/agentic-shadow-cap-0.1.0.dar \
+				--script-name AgenticShadowCap.MvpScript:mvpBootstrap \
+				--ledger-host localhost --port 6865 --wall-clock-time; \
+		else \
+			cd $(DAML_DIR) && $$DAML_CMD script --dar .daml/dist/agentic-shadow-cap-0.1.0.dar \
+				--script-name AgenticShadowCap.MvpScript:mvpBootstrap \
+				--ledger-host localhost --ledger-port 6865 --wall-clock-time; \
+		fi
 	@echo "==> Sandbox demo complete. Full lifecycle executed."
 
 # ─── Full Demo ───────────────────────────────────────────────────────────────
 demo:
 	@echo "============================================"
-	@echo "  Agentic Shadow-Cap — Full Demo"
+	@echo "  Agentic Shadow-Cap — Full Demo (Sandbox)"
 	@echo "============================================"
-	$(MAKE) build
-	$(MAKE) up
-	$(MAKE) upload
-	$(MAKE) seed
-	$(MAKE) controls-reset
-	$(MAKE) agents
+	$(MAKE) demo-web-venv
+	@echo "==> Starting backend (sandbox + market API + agents + gateway)..."
+	@pkill -f "deploy/public_demo/run_backend.py" 2>/dev/null || true
+	@pkill -f "dpm sandbox" 2>/dev/null || true
+	@pkill -f "daml sandbox" 2>/dev/null || true
+	@pkill -f "canton-enterprise.*sandbox" 2>/dev/null || true
+	@for p in 6865 6870 6871 6872 6873 7575; do \
+		lsof -ti tcp:$$p | xargs kill -9 2>/dev/null || true; \
+	done
+	@nohup .venv/bin/python deploy/public_demo/run_backend.py >/tmp/canton_backend.log 2>&1 &
+	@sleep 4
 	$(MAKE) ui
 	@echo ""
 	@echo "============================================"
 	@echo "  Demo is LIVE"
-	@echo "  UI:     http://localhost:5173"
-	@echo "  API:    http://localhost:8090/status"
-	@echo "  Inject: http://localhost:8090/docs"
+	@echo "  UI:      http://localhost:5173"
+	@echo "  Backend: http://localhost:8080/status"
+	@echo "  Logs:    tail -f /tmp/canton_backend.log"
 	@echo "============================================"
+
+demo-docker:
+	@echo "==> Legacy multi-node Canton Docker topology is currently incompatible."
+	@echo "==> Running stable full demo path instead."
+	$(MAKE) demo
+
+demo-stop:
+	@echo "==> Stopping demo services..."
+	-pkill -f "deploy/public_demo/run_backend.py" 2>/dev/null
+	-pkill -f "daml sandbox" 2>/dev/null
+	-pkill -f "dpm sandbox" 2>/dev/null
+	-pkill -f "canton-enterprise.*sandbox" 2>/dev/null
+	$(MAKE) agents-stop
+	$(MAKE) ui-stop
+	@echo "==> Demo services stopped."
 
 # ─── Testing ────────────────────────────────────────────────────────────────
 test-daml:
 	@echo "==> Running Daml tests..."
-	cd $(DAML_DIR) && daml test
+	@$(ensure_daml_cmd); \
+		echo "==> Using $$DAML_CMD"; \
+		cd $(DAML_DIR) && $$DAML_CMD test
+	@echo "==> All Daml tests passed."
+
+dpm-test:
+	@echo "==> Running Daml tests with dpm..."
+	@$(ensure_dpm_cmd); \
+		echo "==> Using $$DPM_CMD"; \
+		cd $(DAML_DIR) && $$DPM_CMD test
 	@echo "==> All Daml tests passed."
 
 test-e2e:
@@ -157,8 +284,8 @@ devnet-demo:
 
 devnet-down:
 	@echo "==> Stopping Canton L1 (Splice LocalNet)..."
-	@LOCALNET_DIR="$${HOME}/.canton/0.5.10/splice-node/docker-compose/localnet" && \
-	 IMAGE_TAG=0.5.10 && \
+	@LOCALNET_DIR="$${HOME}/.canton/$(CANTON_VERSION)/splice-node/docker-compose/localnet" && \
+	 IMAGE_TAG=$(CANTON_VERSION) && \
 	 export LOCALNET_DIR IMAGE_TAG && \
 	 docker compose \
 	   --env-file "$$LOCALNET_DIR/compose.env" \
@@ -206,6 +333,9 @@ status:
 	@echo ""
 	@echo "==> Agent processes:"
 	@ps aux | grep -E "(seller_agent|buyer_agent|market_api)" | grep -v grep || echo "  (none running)"
+	@echo ""
+	@echo "==> Backend/UI processes:"
+	@ps aux | grep -E "(run_backend.py|uvicorn deploy.public_demo.gateway|vite --host 127.0.0.1 --port 5173)" | grep -v grep || echo "  (none running)"
 
 # ─── Clean ───────────────────────────────────────────────────────────────────
 clean:

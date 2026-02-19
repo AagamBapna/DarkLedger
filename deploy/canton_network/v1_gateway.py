@@ -186,12 +186,24 @@ def _b64url_bytes(raw: bytes) -> str:
 def _make_insecure_token(party: str | None, admin: bool) -> str:
     if CFG.insecure_token_mode in {"hs256", "hs256-unsafe", "unsafe"}:
         header = {"alg": "HS256", "typ": "JWT"}
+        ledger_claim: dict[str, Any] = {
+            "ledgerId": CFG.insecure_ledger_id,
+            "applicationId": "shadowcap-v1-gateway",
+            "userId": CFG.insecure_sub,
+            "user-id": CFG.insecure_sub,
+            "user_id": CFG.insecure_sub,
+            "admin": bool(admin),
+            "actAs": [] if party is None else [party],
+            "readAs": [] if party is None else [party],
+        }
         payload: dict[str, Any] = {
             "sub": CFG.insecure_sub,
             "aud": CFG.insecure_audience,
+            "userId": CFG.insecure_sub,
+            "user-id": CFG.insecure_sub,
+            "user_id": CFG.insecure_sub,
+            "https://daml.com/ledger-api": ledger_claim,
         }
-        if admin:
-            payload["admin"] = True
         unsigned = f"{_b64url(header)}.{_b64url(payload)}".encode("utf-8")
         signature = hmac.new(
             CFG.insecure_secret.encode("utf-8"),
@@ -203,6 +215,9 @@ def _make_insecure_token(party: str | None, admin: bool) -> str:
     claim: dict[str, Any] = {
         "ledgerId": CFG.insecure_ledger_id,
         "applicationId": "shadowcap-v1-gateway",
+        "userId": CFG.insecure_sub,
+        "user-id": CFG.insecure_sub,
+        "user_id": CFG.insecure_sub,
         "admin": bool(admin),
         "actAs": [] if party is None else [party],
         "readAs": [] if party is None else [party],
@@ -270,11 +285,11 @@ def _outbound_auth(
     if configured:
         return _normalize_token(configured)
 
-    if incoming_auth:
-        return incoming_auth
-
     if CFG.allow_insecure_tokens:
         return f"Bearer {_make_insecure_token(party_for_token, admin=admin)}"
+
+    if incoming_auth:
+        return incoming_auth
 
     return None
 
@@ -810,6 +825,29 @@ async def v1_exercise(request: Request) -> dict[str, Any]:
             "events": result_events,
         },
     }
+
+
+@app.on_event("startup")
+async def _startup_checks() -> None:
+    network_mode = os.getenv("CANTON_NETWORK_MODE", "local").strip().lower()
+    if network_mode in {"devnet", "testnet", "mainnet", "public"}:
+        has_token = bool(CFG.provider_token or CFG.user_token or CFG.shared_token)
+        if not has_token:
+            import sys
+            print(
+                f"\nFATAL: Gateway cannot start on {network_mode} without authentication.\n"
+                f"Set CANTON_PROVIDER_TOKEN + CANTON_USER_TOKEN or CANTON_JWT_TOKEN.\n"
+                f"For local development, set CANTON_NETWORK_MODE=local\n",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if CFG.allow_insecure_tokens:
+            import sys
+            print(
+                f"WARNING: Insecure tokens enabled on {network_mode}. "
+                f"Set CANTON_ALLOW_INSECURE_TOKEN=false for production.",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":

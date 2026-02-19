@@ -31,4 +31,40 @@ jobs:
 
       - name: Compile Python entrypoints
         run: |
-          python -m py_compile agent/*.py deploy/scripts/seed_demo.py
+          python -m py_compile agent/*.py deploy/scripts/*.py deploy/public_demo/*.py deploy/canton_network/*.py
+
+  daml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Daml tooling (dpm)
+        run: |
+          curl -fsSL https://get.digitalasset.com/install/install.sh | sh
+          echo "$HOME/.daml/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.dpm/bin" >> "$GITHUB_PATH"
+          if ! command -v dpm >/dev/null 2>&1; then
+            DPM_BIN="$(find "$HOME" -type f -name dpm 2>/dev/null | head -n 1 || true)"
+            if [ -n "$DPM_BIN" ]; then
+              echo "$(dirname "$DPM_BIN")" >> "$GITHUB_PATH"
+            fi
+          fi
+
+      - name: Verify dpm is available
+        run: |
+          command -v dpm
+          dpm --version
+
+      - name: Build and test Daml package
+        run: |
+          make dpm-build
+          make dpm-test
+
+      - name: Deployment script smoke checks
+        run: |
+          bash -n deploy/devnet/setup_devnet_validator.sh
+          bash -n deploy/devnet/run_devnet_demo.sh
+          bash -n deploy/canton_network/run_canton_network_demo.sh
+          bash -n test_lifecycle.sh
+          bash -n test_e2e.sh

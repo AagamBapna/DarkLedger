@@ -10,7 +10,12 @@
       "Bash(npx vite build:*)",
       "Bash(python3:*)",
       "Bash(chmod:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:docs.digitalasset.com)",
+      "Bash(git rm:*)",
+      "Bash(make test-daml:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

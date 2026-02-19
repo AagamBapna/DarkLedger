@@ -22,7 +22,11 @@ from typing import Any
 JSON_API_URL = os.getenv("JSON_API_URL", "http://localhost:7575")
 PACKAGE_ID = os.getenv("PACKAGE_ID", "")
 STATIC_TOKEN = os.getenv("JSON_API_TOKEN", "")
-USE_INSECURE_TOKEN = os.getenv("JSON_API_USE_INSECURE_TOKEN", "true").lower() == "true"
+
+# Network mode determines insecure token defaults
+NETWORK_MODE = os.getenv("CANTON_NETWORK_MODE", "local").strip().lower()
+_insecure_default = "true" if NETWORK_MODE in {"local", "devnet"} else "false"
+USE_INSECURE_TOKEN = os.getenv("JSON_API_USE_INSECURE_TOKEN", _insecure_default).lower() == "true"
 
 ISSUER = os.getenv("ISSUER_PARTY", "Company")
 SELLER = os.getenv("SELLER_PARTY", "Seller")
@@ -235,6 +239,14 @@ def ensure_trade_intent() -> None:
 
 def main() -> int:
     print(f"[seed] JSON API: {JSON_API_URL}")
+    print(f"[seed] Network mode: {NETWORK_MODE.upper()}")
+    if NETWORK_MODE in {"testnet", "mainnet"} and not STATIC_TOKEN:
+        print(
+            f"[seed] ERROR: CANTON_NETWORK_MODE={NETWORK_MODE} requires JSON_API_TOKEN. "
+            f"Set JSON_API_TOKEN or use CANTON_NETWORK_MODE=local for local development.",
+            file=sys.stderr,
+        )
+        return 1
     resolve_party_ids()
     print(
         "[seed] party map:"

@@ -1,4 +1,4 @@
-export type Party = "Seller" | "SellerAgent" | "Buyer" | "BuyerAgent" | "Company" | "Public";
+export type Party = string;
 
 export interface ContractRecord<TPayload> {
   contractId: string;

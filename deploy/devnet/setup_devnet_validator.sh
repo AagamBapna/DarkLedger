@@ -19,7 +19,8 @@
 #
 # Prerequisites:
 #   - Docker Desktop running (8GB+ memory recommended)
-#   - Daml SDK 3.4.x installed
+#   - dpm installed
+#   - Java 17+
 #   - Python 3.10+ with venv
 #   - curl, tar
 #
@@ -115,26 +116,26 @@ step "Checking Docker..."
 docker info > /dev/null 2>&1 || fail_exit "Docker is not running. Start Docker Desktop first."
 ok "Docker is running"
 
-step "Checking Daml SDK..."
-daml version > /dev/null 2>&1 || fail_exit "Daml SDK not found. Install from https://docs.daml.com/getting-started/installation.html"
-ok "Daml SDK found"
+step "Checking dpm..."
+dpm --version > /dev/null 2>&1 || fail_exit "dpm not found. Install from https://docs.digitalasset.com/build/3.4/getting-started/installation.html"
+ok "dpm found"
 
 step "Preparing DAR..."
 DAR_READY=false
 if [[ -f "$DAR_FILE" ]]; then
-  if daml damlc inspect-dar "$DAR_FILE" --json >/dev/null 2>&1; then
+  if dpm damlc inspect-dar "$DAR_FILE" --json >/dev/null 2>&1; then
     DAR_READY=true
     ok "DAR found and readable: $DAR_FILE"
   else
-    warn "Existing DAR is incompatible with current Daml SDK. Rebuilding."
+    warn "Existing DAR is incompatible with current dpm toolchain. Rebuilding."
   fi
 fi
 
 if [[ "$DAR_READY" != "true" ]]; then
   echo "  Building DAR..."
   cd "$PROJECT_DIR" && make build
-  daml damlc inspect-dar "$DAR_FILE" --json >/dev/null 2>&1 || \
-    fail_exit "DAR exists but cannot be inspected by current Daml SDK."
+  dpm damlc inspect-dar "$DAR_FILE" --json >/dev/null 2>&1 || \
+    fail_exit "DAR exists but cannot be inspected by current dpm toolchain."
   ok "DAR built and validated: $DAR_FILE"
 fi
 
@@ -260,6 +261,7 @@ ok "Python runtime ready (.venv)"
 
 export CANTON_PROVIDER_URL="http://127.0.0.1:${APP_PROVIDER_JSON_API_PORT}"
 export CANTON_USER_URL="http://127.0.0.1:${APP_USER_JSON_API_PORT}"
+export CANTON_NETWORK_MODE="${CANTON_NETWORK_MODE:-local}"
 export CANTON_ALLOW_INSECURE_TOKEN="${CANTON_ALLOW_INSECURE_TOKEN:-true}"
 export CANTON_INSECURE_TOKEN_MODE="${CANTON_INSECURE_TOKEN_MODE:-hs256-unsafe}"
 export CANTON_INSECURE_SECRET="${CANTON_INSECURE_SECRET:-unsafe}"
@@ -280,7 +282,7 @@ fi
 if "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/deploy/canton_network/bootstrap.py"; then
   ok "Bootstrap complete (DAR upload + party map + seed)"
 else
-  warn "Bootstrap failed. Check deploy/canton_network/bootstrap.py output above."
+  fail_exit "Bootstrap failed. Fix bootstrap errors before continuing."
 fi
 
 # ── Step 8: Print Status ───────────────────────────────

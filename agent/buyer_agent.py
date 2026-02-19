@@ -187,6 +187,11 @@ class BuyerAgent(BaseAgent):
 
 
 async def main() -> None:
+    from network_config import require_auth_for_public_network, print_network_banner
+
+    print_network_banner("buyer-agent")
+    require_auth_for_public_network("buyer-agent")
+
     ctx = build_context()
     agent = BuyerAgent(ctx)
     await agent.start()

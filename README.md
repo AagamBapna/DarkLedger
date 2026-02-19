@@ -72,12 +72,13 @@ This is the core innovation. Canton's sub-transaction privacy ensures **no globa
 ## Quick Start
 
 ### Prerequisites
-- [Daml SDK 3.4.x](https://docs.digitalasset.com/build/3.4/getting-started/installation.html)
+- [dpm (Digital Asset Package Manager)](https://docs.digitalasset.com/build/3.4/getting-started/installation.html)
+- Java 17+ (required by Daml tooling)
 - [Docker + Docker Compose](https://docs.docker.com/get-docker/)
 - [Node.js 18+](https://nodejs.org/) (for the React UI)
 - Python 3.10+ (for agents)
 
-### One-Command Demo (requires Docker + Daml SDK)
+### One-Command Demo (requires Docker + dpm)
 ```bash
 make demo
 ```
@@ -319,52 +320,139 @@ deploy/
 9. **Issuer** starts settlement → exercises `FinalizeSettlement` (DvP atomic swap)
 10. `TradeAuditRecord` created — immutable settlement record visible to all parties
 
+## dpm (Digital Asset Package Manager)
+
+This repository now uses [dpm](https://docs.digitalasset.com/build/3.4/dpm/dpm.html) as the primary Daml CLI for all build/test flows and sandbox/bootstrap helper flows.
+
+| Command | What It Does |
+|---|---|
+| `make dpm-install` | Install dpm via official installer |
+| `make build` | Build DAR using `dpm build` |
+| `make test-daml` | Run Daml tests using `dpm test` |
+
+Install dpm:
+
+```bash
+curl -fsSL https://get.digitalasset.com/install/install.sh | sh
+dpm --version
+```
+
+## Migration Note
+
+- Replaced legacy Daml Assistant (`daml`) build/test/script/sandbox/inspect invocations with `dpm` commands.
+- Replaced `daml ledger upload-dar` usage with participant JSON API v2 package upload in `make upload`.
+- Kept DAR artifact path unchanged at `daml/.daml/dist/agentic-shadow-cap-0.1.0.dar` for deployment compatibility.
+
 ## Configuration
+
+### Network Modes
+
+`CANTON_NETWORK_MODE` controls authentication behavior across all components:
+
+| Mode | Insecure Tokens | Auth Required | Use Case |
+|---|---|---|---|
+| `local` (default) | Allowed | No | Local Docker development |
+| `devnet` | Allowed | No | Canton L1 LocalNet |
+| `testnet` | **Blocked** | **Yes** | Canton TestNet |
+| `mainnet` | **Blocked** | **Yes** | Canton MainNet |
+
+In `testnet`/`mainnet`, agents/gateway/bootstrap **fail fast** with clear errors if auth tokens are missing.
+
+### Environment Variables (Network)
+| Variable | Default | Description |
+|---|---|---|
+| `CANTON_NETWORK_MODE` | `local` | Network mode (see above) |
+| `CANTON_PROVIDER_URL` | `http://127.0.0.1:3975` | Provider participant JSON API |
+| `CANTON_USER_URL` | `http://127.0.0.1:2975` | User participant JSON API |
+| `CANTON_PROVIDER_TOKEN` | (none) | JWT for provider participant |
+| `CANTON_USER_TOKEN` | (none) | JWT for user participant |
+| `CANTON_JWT_TOKEN` | (none) | Shared JWT (both participants) |
 
 ### Environment Variables (Agents)
 | Variable | Default | Description |
 |---|---|---|
-| `DAML_LEDGER_URL` | `http://localhost:5011` | gRPC endpoint (used in `dazl` mode) |
+| `DAML_LEDGER_URL` | `http://localhost:5011` | gRPC endpoint (dazl mode) |
 | `DAML_LEDGER_MODE` | `dazl` | `dazl` or `http-json` |
-| `DAML_HTTP_JSON_URL` | (none) | v1 gateway endpoint for `http-json` mode |
-| `SELLER_AGENT_PARTY` | `SellerAgent` | Party ID for seller agent |
-| `BUYER_AGENT_PARTY` | `BuyerAgent` | Party ID for buyer agent |
+| `DAML_HTTP_JSON_URL` | (none) | v1 gateway endpoint |
+| `SELLER_PARTY` | `Seller` | Seller party alias (configurable) |
+| `SELLER_AGENT_PARTY` | `SellerAgent` | Seller agent party alias |
+| `BUYER_PARTY` | `Buyer` | Buyer party alias |
+| `BUYER_AGENT_PARTY` | `BuyerAgent` | Buyer agent party alias |
+| `ISSUER_PARTY` | `Company` | Issuer/compliance party alias |
+| `DEMO_INSTRUMENT` | `COMPANY-SERIES-A` | Instrument name |
 | `OPENAI_API_KEY` | (none) | OpenAI key for LLM decisions (optional) |
-| `AGENT_POLL_SECONDS` | `5` | Polling interval |
-| `MARKET_FEED_PATH` | `./agent/mock_market_feed.json` | Market data feed path |
-| `AGENT_CONTROL_PATH` | `./agent/agent_controls.json` | Auto-reprice toggle state |
 
 ### Environment Variables (UI)
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_JSON_API_URL` | `http://localhost:8081` | v1 compatibility gateway URL |
+| `VITE_JSON_API_URL` | `http://localhost:7575` | JSON API / gateway URL |
 | `VITE_MARKET_API_URL` | `http://localhost:8090` | Market event API URL |
-| `VITE_JSON_API_USE_INSECURE_TOKEN` | `false` | Usually false when gateway handles auth |
+| `VITE_CANTON_NETWORK_MODE` | `local` | Controls UI endpoint labels |
+| `VITE_JSON_API_USE_INSECURE_TOKEN` | `true` | Use insecure JWT tokens |
 | `VITE_POLL_INTERVAL_MS` | `3000` | UI polling interval |
 
-## Canton L1 Deployment
+## Deployment Paths
 
-### Quick Start
+### Path 1: Local Docker (Quick Test)
 ```bash
-make devnet        # Start Canton L1 LocalNet + bootstrap contracts/parties
-make devnet-demo   # Start gateway + agents + market API on top of Canton
-make devnet-down   # Stop Canton L1
+make demo    # One command: build + nodes + upload + seed + agents + UI
+# Open http://localhost:5173
 ```
 
-### What is Canton L1?
-The `make devnet` target deploys your dApp onto **Splice LocalNet** — the official
-local Canton Network topology from `digital-asset/decentralized-canton-sync`.
-It runs a Super Validator with Global Synchronizer, App Provider participant,
-and App User participant — the same stack used on Canton Network mainnet.
+### Path 2: Canton L1 LocalNet (Recommended for Hackathon)
+```bash
+make devnet           # Download splice-node, start LocalNet, bootstrap
+make devnet-demo      # Start v1 gateway + agents + market API
 
-### Key Ports
-- App Provider Ledger API: `localhost:3901`
-- App Provider JSON API: `localhost:3975`
-- App User Ledger API: `localhost:2901`
-- v1 compatibility gateway: `localhost:8081`
-- Scan Explorer: `http://scan.localhost:4000`
+# Start UI (separate terminal)
+cd ui && npm install
+VITE_JSON_API_URL=http://localhost:8081 \
+  VITE_MARKET_API_URL=http://localhost:8090 \
+  VITE_JSON_API_USE_INSECURE_TOKEN=false \
+  VITE_CANTON_NETWORK_MODE=devnet npm run dev
 
-For full deployment steps and submission checklist, see `deploy/devnet/README.md`.
+make devnet-down      # Stop Canton L1
+```
+
+### Path 3: Public TestNet / MainNet
+```bash
+export CANTON_NETWORK_MODE=testnet
+export CANTON_PROVIDER_URL=https://<provider>
+export CANTON_USER_URL=https://<user>
+export CANTON_PROVIDER_TOKEN=<jwt>
+export CANTON_USER_TOKEN=<jwt>
+
+make build && make canton-network-bootstrap
+make canton-network-demo
+
+cd ui && npm install
+VITE_JSON_API_URL=http://localhost:8081 \
+  VITE_CANTON_NETWORK_MODE=testnet npm run dev
+```
+
+### Canton L1 Key Ports
+| Service | Port |
+|---|---|
+| App Provider Ledger API | `localhost:3901` |
+| App Provider JSON API | `localhost:3975` |
+| App User Ledger API | `localhost:2901` |
+| v1 compatibility gateway | `localhost:8081` |
+| Market API | `localhost:8090` |
+| Scan Explorer | `http://scan.localhost:4000` |
+
+For full deployment steps see `deploy/devnet/README.md`.
+
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| Cannot connect to Docker | Start Docker Desktop |
+| Nodes not healthy | `docker ps -a` + `docker logs <container>` |
+| DAR upload fails | Ensure port is open: `nc -z localhost 5011` |
+| Memory issues (Canton L1) | Docker Desktop > Settings > Resources > Memory > 8GB+ |
+| "FATAL: cannot start on testnet" | Set `CANTON_PROVIDER_TOKEN` + `CANTON_USER_TOKEN` or use `CANTON_NETWORK_MODE=local` |
+| Agent not connecting | Check `DAML_LEDGER_MODE` and matching URL |
+| UI shows "degraded" | Verify JSON API is running: `curl http://localhost:7575/v1/parties` |
 
 ## License
 

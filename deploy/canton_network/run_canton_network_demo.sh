@@ -31,11 +31,18 @@ CANTON_PROVIDER_URL="${CANTON_PROVIDER_URL:-http://127.0.0.1:3975}"
 CANTON_USER_URL="${CANTON_USER_URL:-http://127.0.0.1:2975}"
 CANTON_GATEWAY_PORT="${CANTON_GATEWAY_PORT:-8081}"
 MARKET_API_PORT="${MARKET_API_PORT:-8090}"
+CANTON_NETWORK_MODE="${CANTON_NETWORK_MODE:-local}"
 
-CANTON_ALLOW_INSECURE_TOKEN="${CANTON_ALLOW_INSECURE_TOKEN:-true}"
+CANTON_ALLOW_INSECURE_TOKEN="${CANTON_ALLOW_INSECURE_TOKEN:-$([ "$CANTON_NETWORK_MODE" = "local" ] && echo true || echo false)}"
 CANTON_INSECURE_SECRET="${CANTON_INSECURE_SECRET:-unsafe}"
 CANTON_INSECURE_AUDIENCE="${CANTON_INSECURE_AUDIENCE:-https://canton.network.global}"
 CANTON_INSECURE_SUB="${CANTON_INSECURE_SUB:-ledger-api-user}"
+
+SELLER_AGENT_PARTY="${SELLER_AGENT_PARTY:-SellerAgent}"
+SELLER_PARTY="${SELLER_PARTY:-Seller}"
+BUYER_AGENT_PARTY="${BUYER_AGENT_PARTY:-BuyerAgent}"
+BUYER_PARTY="${BUYER_PARTY:-Buyer}"
+TARGET_INSTRUMENT="${TARGET_INSTRUMENT:-COMPANY-SERIES-A}"
 
 PYTHON_BIN="${PYTHON_BIN:-${PROJECT_DIR}/.venv/bin/python}"
 
@@ -92,6 +99,7 @@ echo -e "${CYAN}============================================${NC}"
 echo ""
 echo "  Provider API: $CANTON_PROVIDER_URL"
 echo "  User API:     $CANTON_USER_URL"
+echo "  Mode:         $CANTON_NETWORK_MODE"
 echo ""
 
 step "Checking participant connectivity"
@@ -116,6 +124,10 @@ ok "Python deps installed"
 
 step "Ensuring auth tokens"
 if [[ -z "${CANTON_PROVIDER_TOKEN:-}" && -z "${CANTON_USER_TOKEN:-}" && -z "${CANTON_JWT_TOKEN:-}" ]]; then
+  if [[ "${CANTON_NETWORK_MODE}" =~ ^(devnet|testnet|mainnet|public)$ ]]; then
+    echo "  FAILED missing CANTON_PROVIDER_TOKEN/CANTON_USER_TOKEN (or CANTON_JWT_TOKEN) for mode=${CANTON_NETWORK_MODE}"
+    exit 1
+  fi
   if [[ "${CANTON_ALLOW_INSECURE_TOKEN}" == "true" ]]; then
     SHARED_TOKEN="$(generate_unsafe_token)"
     export CANTON_PROVIDER_TOKEN="$SHARED_TOKEN"
@@ -132,7 +144,7 @@ make build
 ok "DAR build completed"
 
 step "Bootstrapping on Canton participant APIs"
-export CANTON_PROVIDER_URL CANTON_USER_URL
+export CANTON_NETWORK_MODE CANTON_PROVIDER_URL CANTON_USER_URL
 export CANTON_ALLOW_INSECURE_TOKEN CANTON_INSECURE_SECRET CANTON_INSECURE_AUDIENCE CANTON_INSECURE_SUB
 "$PYTHON_BIN" "${PROJECT_DIR}/deploy/canton_network/bootstrap.py"
 ok "DAR upload + party allocation + seed complete"
@@ -186,10 +198,11 @@ ok "Market API is live at http://localhost:${MARKET_API_PORT}"
 
 step "Starting seller agent"
 PYTHONUNBUFFERED=1 \
+CANTON_NETWORK_MODE="${CANTON_NETWORK_MODE}" \
 DAML_LEDGER_MODE=http-json \
 DAML_HTTP_JSON_URL="http://127.0.0.1:${CANTON_GATEWAY_PORT}" \
-SELLER_AGENT_PARTY=SellerAgent \
-SELLER_PARTY=Seller \
+SELLER_AGENT_PARTY="${SELLER_AGENT_PARTY}" \
+SELLER_PARTY="${SELLER_PARTY}" \
 MARKET_FEED_PATH="${PROJECT_DIR}/agent/mock_market_feed.json" \
 AGENT_CONTROL_PATH="${PROJECT_DIR}/agent/agent_controls.json" \
 "$PYTHON_BIN" "${PROJECT_DIR}/agent/seller_agent.py" &
@@ -198,11 +211,12 @@ ok "Seller agent started"
 
 step "Starting buyer agent"
 PYTHONUNBUFFERED=1 \
+CANTON_NETWORK_MODE="${CANTON_NETWORK_MODE}" \
 DAML_LEDGER_MODE=http-json \
 DAML_HTTP_JSON_URL="http://127.0.0.1:${CANTON_GATEWAY_PORT}" \
-BUYER_AGENT_PARTY=BuyerAgent \
-BUYER_PARTY=Buyer \
-TARGET_INSTRUMENT=COMPANY-SERIES-A \
+BUYER_AGENT_PARTY="${BUYER_AGENT_PARTY}" \
+BUYER_PARTY="${BUYER_PARTY}" \
+TARGET_INSTRUMENT="${TARGET_INSTRUMENT}" \
 MARKET_FEED_PATH="${PROJECT_DIR}/agent/mock_market_feed.json" \
 AGENT_CONTROL_PATH="${PROJECT_DIR}/agent/agent_controls.json" \
 "$PYTHON_BIN" "${PROJECT_DIR}/agent/buyer_agent.py" &

@@ -1,7 +1,8 @@
 # Deployment Guide (Canton + Agentic Shadow-Cap)
 
 ## Prerequisites
-- **Daml SDK 2.10.x** (`daml` CLI on PATH)
+- **dpm** (`dpm` CLI on PATH)
+- **Java 17+** (required by Daml tooling)
 - **Docker** + **Docker Compose**
 - **Python 3.10+** with pip
 - **Node.js 18+** with npm
@@ -21,7 +22,7 @@ This will: build DAR → start Canton nodes + JSON API proxy → upload DAR → 
 ```bash
 make build
 # or manually:
-cd daml && daml build
+cd daml && dpm build
 ```
 
 ### 2) Start Canton Nodes
@@ -85,7 +86,7 @@ Open http://localhost:5173
 make sandbox
 ```
 
-Runs the full lifecycle locally via `daml script`.
+Runs the full lifecycle locally via `dpm script`.
 
 ### 9) Shutdown
 

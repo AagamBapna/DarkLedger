@@ -26,8 +26,16 @@ from typing import Any
 
 import httpx
 
-PROVIDER_ALIASES = ["Seller", "SellerAgent", "Company"]
-USER_ALIASES = ["Buyer", "BuyerAgent"]
+def _csv_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+PROVIDER_ALIASES = _csv_list(
+    os.getenv("CANTON_PROVIDER_ALIASES", "Seller,SellerAgent,Company")
+)
+USER_ALIASES = _csv_list(
+    os.getenv("CANTON_USER_ALIASES", "Buyer,BuyerAgent")
+)
 
 PARTY_SCALAR_FIELDS: set[str] = {
     "party",
@@ -185,7 +193,7 @@ def _extract_first_json_blob(text: str) -> dict[str, Any] | None:
 
 
 def inspect_package_id(dar_path: Path) -> str:
-    cmd = ["daml", "damlc", "inspect-dar", str(dar_path), "--json"]
+    cmd = ["dpm", "damlc", "inspect-dar", str(dar_path), "--json"]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     combined = f"{proc.stdout}\n{proc.stderr}"
     payload = _extract_first_json_blob(combined)
@@ -583,8 +591,26 @@ def _ensure_seed_data(
 
 
 def main() -> int:
+    # Network mode validation
+    network_mode = os.getenv("CANTON_NETWORK_MODE", "local").strip().lower()
+    _print_step(f"Network mode: {network_mode.upper()}")
+    if network_mode in {"devnet", "testnet", "mainnet", "public"}:
+        has_any_token = bool(
+            os.getenv("CANTON_PROVIDER_TOKEN", "").strip()
+            or os.getenv("CANTON_USER_TOKEN", "").strip()
+            or os.getenv("CANTON_JWT_TOKEN", "").strip()
+        )
+        if not has_any_token:
+            _fail(
+                f"CANTON_NETWORK_MODE={network_mode} requires authentication. "
+                f"Set CANTON_PROVIDER_TOKEN + CANTON_USER_TOKEN or CANTON_JWT_TOKEN."
+            )
+
     shared_token = os.getenv("CANTON_JWT_TOKEN", "").strip()
-    allow_insecure_token = _env_bool("CANTON_ALLOW_INSECURE_TOKEN", True)
+    allow_insecure_token = _env_bool(
+        "CANTON_ALLOW_INSECURE_TOKEN",
+        network_mode not in {"devnet", "testnet", "mainnet", "public"},
+    )
 
     provider = Node(
         name="provider",

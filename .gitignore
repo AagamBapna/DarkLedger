@@ -1,0 +1,27 @@
+.DS_Store
+.env
+.env.*
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Node
+node_modules/
+ui/node_modules/
+ui/dist/
+
+# Daml build outputs
+daml/.daml/
+daml/log/
+
+# Local runtime artifacts
+*.log
+*.pid
+ui/.env
+deploy/canton_network/party_map.json
+
+# OS/editor
+.idea/
+.vscode/

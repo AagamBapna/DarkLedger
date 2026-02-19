@@ -25,6 +25,7 @@ Defaults:
 - User participant API: `http://127.0.0.1:2975`
 - Gateway: `http://127.0.0.1:8081`
 - Market API: `http://127.0.0.1:8090`
+- Network mode: `local` (set `CANTON_NETWORK_MODE=devnet|testnet|mainnet|public` for shared/public networks)
 
 3) Start UI:
 
@@ -43,8 +44,11 @@ Supported env vars:
 - `CANTON_PROVIDER_TOKEN`, `CANTON_USER_TOKEN` (preferred)
 - `CANTON_JWT_TOKEN` (shared token for both sides)
 - `CANTON_ALLOW_INSECURE_TOKEN=true` (default in scripts)
+- `CANTON_PROVIDER_ALIASES`, `CANTON_USER_ALIASES` (comma-separated party alias sets)
 
 For LocalNet with unsafe auth, if no token is provided, scripts auto-generate HS256 tokens (`secret=unsafe`, `aud=https://canton.network.global`, `sub=ledger-api-user`).
+
+For `devnet/testnet/mainnet/public` mode, tokens are required and the runner exits if missing.
 
 ## Party map outputs
 

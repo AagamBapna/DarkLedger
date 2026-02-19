@@ -6,8 +6,8 @@ This path deploys the project as a public web dApp with party-based visibility, 
 
 `deploy/public_demo/run_backend.py` starts:
 
-1. Daml sandbox on `LEDGER_PORT` (default `6865`)
-2. Daml JSON API on `JSON_API_PORT` (default `7575`)
+1. dpm sandbox on `LEDGER_PORT` (default `6865`)
+2. JSON API (started by dpm sandbox) on `JSON_API_PORT` (default `7575`)
 3. Market API on `MARKET_API_PORT` (default `8090`)
 4. Seller + Buyer agents (enabled by default)
 5. Public gateway on `PUBLIC_PORT` (default `8080`)
@@ -28,7 +28,8 @@ Set `RUN_AGENTS=false` to disable seller/buyer agent processes.
 
 Prerequisites:
 
-- `daml` CLI installed and available on PATH
+- `dpm` CLI installed and available on PATH
+- Java 17+ (required by Daml tooling)
 - Python 3.10+
 - Node 18+ (for UI)
 

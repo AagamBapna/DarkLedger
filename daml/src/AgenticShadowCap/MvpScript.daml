@@ -6,11 +6,11 @@ import AgenticShadowCap.Market
 
 mvpBootstrap : Script ()
 mvpBootstrap = script do
-  seller <- allocatePartyWithHint "Seller" (PartyIdHint "Seller")
-  sellerAgent <- allocatePartyWithHint "SellerAgent" (PartyIdHint "SellerAgent")
-  buyer <- allocatePartyWithHint "Buyer" (PartyIdHint "Buyer")
-  buyerAgent <- allocatePartyWithHint "BuyerAgent" (PartyIdHint "BuyerAgent")
-  issuer <- allocatePartyWithHint "Company" (PartyIdHint "Company")
+  seller <- allocatePartyByHint (PartyIdHint "Seller")
+  sellerAgent <- allocatePartyByHint (PartyIdHint "SellerAgent")
+  buyer <- allocatePartyByHint (PartyIdHint "Buyer")
+  buyerAgent <- allocatePartyByHint (PartyIdHint "BuyerAgent")
+  issuer <- allocatePartyByHint (PartyIdHint "Company")
 
   -- Issuer mints asset and cash holdings for the demo
   sellerAssetCid <- submit issuer do
