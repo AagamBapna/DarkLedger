@@ -96,7 +96,7 @@ export function ComplianceView({
   return (
     <section className="space-y-6">
       {/* Negotiation Queue */}
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <h3 className="mb-3 text-lg font-semibold text-signal-mint">Pending Negotiations</h3>
         {negotiations.length === 0 ? (
           <p className="text-sm text-signal-slate">No negotiations visible for compliance review.</p>
@@ -109,8 +109,8 @@ export function ComplianceView({
                 item.payload.sellerAccepted && item.payload.buyerAccepted && qty !== null && price !== null && !item.payload.issuerApproved;
               const readyToSettle = item.payload.issuerApproved;
               return (
-                <article key={item.contractId} className="rounded-lg border border-shell-700 bg-shell-950/50 p-3">
-                  <p className="font-semibold text-white">{item.payload.instrument}</p>
+                <article key={item.contractId} className="rounded-lg border border-shell-700 bg-white/75 p-3">
+                  <p className="font-semibold text-shell-950">{item.payload.instrument}</p>
                   <div className="mt-1 flex gap-3 text-xs">
                     <span className={item.payload.sellerAccepted ? "text-signal-mint" : "text-signal-slate"}>
                       Seller: {item.payload.sellerAccepted ? "Yes" : "No"}
@@ -151,7 +151,7 @@ export function ComplianceView({
       </div>
 
       {/* Settlement Monitor with DvP Visualization */}
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <h3 className="mb-3 text-lg font-semibold text-signal-coral">Settlement & DvP Monitor</h3>
         {settlements.length === 0 ? (
           <p className="text-sm text-signal-slate">No TradeSettlement contracts visible.</p>
@@ -171,9 +171,9 @@ export function ComplianceView({
               );
               const canFinalizeDvP = Boolean(sellerAsset && buyerCash);
               return (
-                <article key={item.contractId} className="rounded-lg border border-shell-700 bg-shell-950/50 p-4">
+                <article key={item.contractId} className="rounded-lg border border-shell-700 bg-white/75 p-4">
                   <div className="flex items-center justify-between">
-                    <p className="font-semibold text-white">{item.payload.instrument}</p>
+                    <p className="font-semibold text-shell-950">{item.payload.instrument}</p>
                     <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${item.payload.settled ? "bg-signal-mint/20 text-signal-mint" : "bg-signal-amber/20 text-signal-amber"}`}>
                       {item.payload.settled ? "Settled" : "Pending"}
                     </span>
@@ -183,7 +183,7 @@ export function ComplianceView({
                   <div className="mt-4 rounded-lg border border-shell-700 bg-shell-900 p-3">
                     <p className="mb-2 text-xs uppercase tracking-[0.2em] text-signal-slate">Delivery vs Payment</p>
                     <div className="flex items-center justify-between gap-2 text-sm">
-                      <div className="flex-1 rounded-md bg-shell-950 p-2 text-center">
+                      <div className="flex-1 rounded-md bg-white p-2 text-center">
                         <p className="text-xs text-signal-slate">Seller</p>
                         <p className="font-semibold text-signal-coral">{Number(item.payload.quantity).toLocaleString()} shares</p>
                       </div>
@@ -191,7 +191,7 @@ export function ComplianceView({
                         <span className={`text-lg ${item.payload.settled ? "animate-pulse-settled" : ""}`}>{item.payload.settled ? "⟶" : "⇢"}</span>
                         <span className="text-[10px] text-signal-slate">Asset</span>
                       </div>
-                      <div className="flex-1 rounded-md bg-shell-950 p-2 text-center">
+                      <div className="flex-1 rounded-md bg-white p-2 text-center">
                         <p className="text-xs text-signal-slate">Buyer</p>
                         <p className="font-semibold text-signal-mint">${totalValue.toLocaleString()}</p>
                       </div>
@@ -250,7 +250,7 @@ export function ComplianceView({
       </div>
 
       {/* Audit Trail */}
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <h3 className="mb-3 text-lg font-semibold text-signal-amber">Immutable Audit Trail</h3>
         {auditRecords.length === 0 ? (
           <p className="text-sm text-signal-slate">No audit records found.</p>
@@ -269,7 +269,7 @@ export function ComplianceView({
               <tbody>
                 {auditRecords.map((item) => (
                   <tr key={item.contractId} className="border-b border-shell-800 text-signal-slate">
-                    <td className="py-3 font-medium text-white">{item.payload.instrument}</td>
+                    <td className="py-3 font-medium text-shell-950">{item.payload.instrument}</td>
                     <td className="py-3">{String(item.payload.quantity)}</td>
                     <td className="py-3">{String(item.payload.unitPrice)}</td>
                     <td className="py-3">${(Number(item.payload.quantity) * Number(item.payload.unitPrice)).toLocaleString()}</td>

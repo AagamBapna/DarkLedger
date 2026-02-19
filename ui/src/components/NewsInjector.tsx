@@ -35,7 +35,7 @@ export function NewsInjector() {
   };
 
   return (
-    <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+    <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
       <h3 className="mb-3 text-lg font-semibold text-signal-amber">News Event Injector</h3>
       <p className="mb-3 text-xs text-signal-slate">
         Inject market events to trigger AI agent repricing in real time.
@@ -56,7 +56,7 @@ export function NewsInjector() {
         <div className="mt-3 max-h-32 overflow-y-auto">
           {injectedEvents.map((ev) => (
             <div key={ev.id} className="flex justify-between border-b border-shell-800 py-1 text-xs text-signal-slate">
-              <span className="font-medium text-white">{ev.type.replace(/_/g, " ")}</span>
+              <span className="font-medium text-shell-950">{ev.type.replace(/_/g, " ")}</span>
               <span>{ev.at}</span>
             </div>
           ))}

@@ -23,6 +23,7 @@ from common import (
     parse_side,
     parse_party_list,
     make_side,
+    parties_match,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -72,57 +73,69 @@ class BuyerAgent(BaseAgent):
 
     async def _discovery_loop(self) -> None:
         while True:
-            tid = self.ctx.template_ids
-            discoveries = await self.query(tid["discovery"])
+            try:
+                tid = self.ctx.template_ids
+                discoveries = await self.query(tid["discovery"])
 
-            has_sell_signal = False
-            own_buy_signal = False
-            matched_sell_signal: dict | None = None
+                has_sell_signal = False
+                own_buy_cids: list[str] = []
+                matched_sell_signal: dict | None = None
 
-            for payload in discoveries.values():
-                side = parse_side(payload.get("side"))
-                instrument = payload.get("instrument", "")
-                posting_agent = payload.get("postingAgent", "")
-                discoverable_by = parse_party_list(payload.get("discoverableBy"))
+                for cid, payload in discoveries.items():
+                    side = parse_side(payload.get("side"))
+                    instrument = payload.get("instrument", "")
+                    posting_agent = payload.get("postingAgent", "")
+                    discoverable_by = parse_party_list(payload.get("discoverableBy"))
 
-                if (
-                    side == "Buy"
-                    and instrument == self.TARGET_INSTRUMENT
-                    and posting_agent == self.ctx.agent_party
-                ):
-                    own_buy_signal = True
+                    if (
+                        side == "Buy"
+                        and instrument == self.TARGET_INSTRUMENT
+                        and parties_match(posting_agent, self.ctx.agent_party)
+                    ):
+                        own_buy_cids.append(str(cid))
 
-                if (
-                    side == "Sell"
-                    and instrument == self.TARGET_INSTRUMENT
-                    and posting_agent != self.ctx.agent_party
-                    and (
-                        not discoverable_by
-                        or self.ctx.agent_party in discoverable_by
-                    )
-                ):
-                    has_sell_signal = True
-                    matched_sell_signal = payload
-                    break
+                    if (
+                        side == "Sell"
+                        and instrument == self.TARGET_INSTRUMENT
+                        and not parties_match(posting_agent, self.ctx.agent_party)
+                        and (
+                            not discoverable_by
+                            or any(parties_match(self.ctx.agent_party, p) for p in discoverable_by)
+                        )
+                    ):
+                        has_sell_signal = True
+                        matched_sell_signal = payload
 
-            if has_sell_signal and not own_buy_signal:
-                issuer = (matched_sell_signal or {}).get("issuer", "")
-                counterparty_agent = (matched_sell_signal or {}).get("postingAgent", "") or self.ctx.counterparty_agent_party
-                discoverable_by = [p for p in [counterparty_agent] if p]
-                if issuer:
-                    try:
-                        await self.create(tid["discovery"], {
-                            "issuer": issuer,
-                            "owner": self.ctx.owner_party,
-                            "postingAgent": self.ctx.agent_party,
-                            "discoverableBy": discoverable_by,
-                            "instrument": self.TARGET_INSTRUMENT,
-                            "side": make_side("Buy"),
-                            "strategyTag": self.DISCOVERY_STRATEGY_TAG,
-                        })
-                        self.log.info("[agent] posted buy DiscoveryInterest for %s", self.TARGET_INSTRUMENT)
-                    except Exception as ex:
-                        self.log.warning("[agent] DiscoveryInterest failed: %s", ex)
+                # Keep at most one active buy-side whisper per instrument.
+                if len(own_buy_cids) > 1:
+                    for stale_cid in sorted(own_buy_cids)[1:]:
+                        try:
+                            await self.exercise(stale_cid, "CancelInterest", {})
+                            self.log.info("[agent] canceled duplicate buy DiscoveryInterest %s", stale_cid)
+                        except Exception as ex:
+                            self.log.warning("[agent] failed to cancel duplicate DiscoveryInterest %s: %s", stale_cid, ex)
+                    own_buy_cids = sorted(own_buy_cids)[:1]
+
+                if has_sell_signal and not own_buy_cids:
+                    issuer = (matched_sell_signal or {}).get("issuer", "")
+                    counterparty_agent = (matched_sell_signal or {}).get("postingAgent", "") or self.ctx.counterparty_agent_party
+                    discoverable_by = [p for p in [counterparty_agent] if p]
+                    if issuer:
+                        try:
+                            await self.create(tid["discovery"], {
+                                "issuer": issuer,
+                                "owner": self.ctx.owner_party,
+                                "postingAgent": self.ctx.agent_party,
+                                "discoverableBy": discoverable_by,
+                                "instrument": self.TARGET_INSTRUMENT,
+                                "side": make_side("Buy"),
+                                "strategyTag": self.DISCOVERY_STRATEGY_TAG,
+                            })
+                            self.log.info("[agent] posted buy DiscoveryInterest for %s", self.TARGET_INSTRUMENT)
+                        except Exception as ex:
+                            self.log.warning("[agent] DiscoveryInterest failed: %s", ex)
+            except Exception as ex:
+                self.log.warning("[agent] discovery loop iteration failed: %s", ex)
 
             await self.sleep()
 
@@ -130,58 +143,61 @@ class BuyerAgent(BaseAgent):
 
     async def _negotiation_loop(self) -> None:
         while True:
-            market_data = self.market_data()
-            controls = self.agent_controls()
-            buyer_auto_reprice = bool(controls.get("buyer_auto_reprice", True))
-            tid = self.ctx.template_ids
-            negotiations = await self.query_by_field(tid["negotiation"], "buyerAgent", self.ctx.agent_party)
+            try:
+                market_data = self.market_data()
+                controls = self.agent_controls()
+                buyer_auto_reprice = bool(controls.get("buyer_auto_reprice", True))
+                tid = self.ctx.template_ids
+                negotiations = await self.query_by_field(tid["negotiation"], "buyerAgent", self.ctx.agent_party)
 
-            # Dynamically adjust max price based on market conditions
-            if buyer_auto_reprice:
-                advice = get_pricing_advice(self.TARGET_INSTRUMENT, self.MAX_PRICE, market_data, "buyer")
-                adjusted_max = advice.recommended_price
-            else:
-                adjusted_max = self.MAX_PRICE
+                # Dynamically adjust max price based on market conditions
+                if buyer_auto_reprice:
+                    advice = get_pricing_advice(self.TARGET_INSTRUMENT, self.MAX_PRICE, market_data, "buyer")
+                    adjusted_max = advice.recommended_price
+                else:
+                    adjusted_max = self.MAX_PRICE
 
-            absolute_ceiling = self._original_max * ABSOLUTE_CEILING_RATIO
-            if adjusted_max > absolute_ceiling:
-                self.log.warning(
-                    "[agent] clamping adjusted max %s -> ceiling %s (140%% of original %s)",
-                    adjusted_max, absolute_ceiling, self._original_max,
-                )
-                adjusted_max = absolute_ceiling
+                absolute_ceiling = self._original_max * ABSOLUTE_CEILING_RATIO
+                if adjusted_max > absolute_ceiling:
+                    self.log.warning(
+                        "[agent] clamping adjusted max %s -> ceiling %s (140%% of original %s)",
+                        adjusted_max, absolute_ceiling, self._original_max,
+                    )
+                    adjusted_max = absolute_ceiling
 
-            for cid, payload in list(negotiations.items()):
-                if cid in self._negotiation_processed:
-                    continue
+                for cid, payload in list(negotiations.items()):
+                    if cid in self._negotiation_processed:
+                        continue
 
-                proposed_qty = optional_decimal(payload.get("proposedQty"))
-                proposed_price = optional_decimal(payload.get("proposedUnitPrice"))
-                seller_accepted = bool(payload.get("sellerAccepted", False))
-                buyer_accepted = bool(payload.get("buyerAccepted", False))
-                instrument = payload.get("instrument", "")
+                    proposed_qty = optional_decimal(payload.get("proposedQty"))
+                    proposed_price = optional_decimal(payload.get("proposedUnitPrice"))
+                    seller_accepted = bool(payload.get("sellerAccepted", False))
+                    buyer_accepted = bool(payload.get("buyerAccepted", False))
+                    instrument = payload.get("instrument", "")
 
-                if not seller_accepted or buyer_accepted:
-                    continue
-                if proposed_qty is None or proposed_price is None:
-                    continue
+                    if not seller_accepted or buyer_accepted:
+                        continue
+                    if proposed_qty is None or proposed_price is None:
+                        continue
 
-                try:
-                    neg_advice = get_negotiation_advice(instrument, proposed_price, adjusted_max, market_data, "buyer")
-                    await self.log_agent_decision(instrument, neg_advice, market_data)
+                    try:
+                        neg_advice = get_negotiation_advice(instrument, proposed_price, adjusted_max, market_data, "buyer")
+                        await self.log_agent_decision(instrument, neg_advice, market_data)
 
-                    if neg_advice.action == "accept":
-                        self.log.info("[negotiation] accepting at %s (reason: %s)", proposed_price, neg_advice.reasoning[:60])
-                        await self.exercise(cid, "AcceptByBuyer", {})
-                    else:
-                        self.log.info("[negotiation] countering at %s (reason: %s)", adjusted_max, neg_advice.reasoning[:60])
-                        await self.exercise(cid, "SubmitBuyerTerms", {
-                            "qty": str(proposed_qty),
-                            "unitPrice": str(adjusted_max),
-                        })
-                    self._negotiation_processed.add(cid)
-                except Exception as ex:
-                    self.log.error("[negotiation] failed: %s", ex)
+                        if neg_advice.action == "accept":
+                            self.log.info("[negotiation] accepting at %s (reason: %s)", proposed_price, neg_advice.reasoning[:60])
+                            await self.exercise(cid, "AcceptByBuyer", {})
+                        else:
+                            self.log.info("[negotiation] countering at %s (reason: %s)", adjusted_max, neg_advice.reasoning[:60])
+                            await self.exercise(cid, "SubmitBuyerTerms", {
+                                "qty": str(proposed_qty),
+                                "unitPrice": str(adjusted_max),
+                            })
+                        self._negotiation_processed.add(cid)
+                    except Exception as ex:
+                        self.log.error("[negotiation] failed: %s", ex)
+            except Exception as ex:
+                self.log.warning("[agent] negotiation loop iteration failed: %s", ex)
 
             await self.sleep()
 

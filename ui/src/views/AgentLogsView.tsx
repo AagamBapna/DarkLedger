@@ -34,7 +34,7 @@ export function AgentLogsView({ party, logs, onClear }: AgentLogsViewProps) {
   return (
     <section className="space-y-6">
       {/* On-ledger AI Decision Logs */}
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <h3 className="mb-1 text-lg font-semibold text-signal-mint">AI Agent Decision Reasoning</h3>
         <p className="mb-3 text-xs text-signal-slate">On-ledger AgentDecisionLog contracts — the AI explains its thinking.</p>
         {decisionLogs.length === 0 ? (
@@ -47,7 +47,7 @@ export function AgentLogsView({ party, logs, onClear }: AgentLogsViewProps) {
               return (
                 <article
                   key={entry.contractId}
-                  className="cursor-pointer rounded-lg border border-shell-700 bg-shell-950/60 p-3 transition hover:border-signal-mint/30"
+                  className="cursor-pointer rounded-lg border border-shell-700 bg-white/80 p-3 transition hover:border-signal-mint/30"
                   onClick={() => setExpandedId(isExpanded ? null : entry.contractId)}
                 >
                   <div className="flex items-center justify-between">
@@ -58,7 +58,7 @@ export function AgentLogsView({ party, logs, onClear }: AgentLogsViewProps) {
                         entry.payload.decision === "counter" ? "bg-signal-coral" :
                         "bg-signal-slate"
                       }`} />
-                      <span className="font-medium text-white">{entry.payload.decision.toUpperCase()}</span>
+                      <span className="font-medium text-shell-950">{entry.payload.decision.toUpperCase()}</span>
                       <span className="text-xs text-signal-slate">{entry.payload.instrument}</span>
                     </div>
                     <span className="text-xs text-signal-slate">{new Date(entry.payload.timestamp).toLocaleTimeString()}</span>
@@ -66,11 +66,11 @@ export function AgentLogsView({ party, logs, onClear }: AgentLogsViewProps) {
                   <p className="mt-1 text-sm text-signal-slate">{entry.payload.reasoning}</p>
                   {isExpanded && (
                     <div className="mt-2 rounded-md bg-shell-900 p-2 text-xs text-signal-slate">
-                      <p>Agent: <span className="text-white">{entry.payload.agent}</span></p>
-                      <p>Volatility: <span className="text-white">{ctx.volatility ?? "—"}</span></p>
-                      <p>Sentiment: <span className="text-white">{ctx.sentiment ?? "—"}</span></p>
-                      <p>Confidence: <span className="text-white">{ctx.confidence ?? "—"}</span></p>
-                      <p>Recommended Price: <span className="text-white">{ctx.recommended_price ?? "—"}</span></p>
+                      <p>Agent: <span className="text-shell-950">{entry.payload.agent}</span></p>
+                      <p>Volatility: <span className="text-shell-950">{ctx.volatility ?? "—"}</span></p>
+                      <p>Sentiment: <span className="text-shell-950">{ctx.sentiment ?? "—"}</span></p>
+                      <p>Confidence: <span className="text-shell-950">{ctx.confidence ?? "—"}</span></p>
+                      <p>Recommended Price: <span className="text-shell-950">{ctx.recommended_price ?? "—"}</span></p>
                     </div>
                   )}
                 </article>
@@ -81,7 +81,7 @@ export function AgentLogsView({ party, logs, onClear }: AgentLogsViewProps) {
       </div>
 
       {/* Local UI log stream */}
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-signal-amber">Local Event Stream</h3>
           <button className="rounded-md border border-shell-700 px-3 py-1 text-sm text-signal-slate" onClick={onClear}>
@@ -106,7 +106,7 @@ export function AgentLogsView({ party, logs, onClear }: AgentLogsViewProps) {
                   <tr key={entry.id} className="border-b border-shell-800 text-signal-slate">
                     <td className="py-3">{new Date(entry.at).toLocaleTimeString()}</td>
                     <td className="py-3">{entry.source}</td>
-                    <td className="py-3 font-medium text-white">{entry.decision}</td>
+                    <td className="py-3 font-medium text-shell-950">{entry.decision}</td>
                     <td className="py-3">{entry.metadata}</td>
                   </tr>
                 ))}

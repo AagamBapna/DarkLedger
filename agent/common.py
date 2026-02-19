@@ -39,11 +39,20 @@ def optional_decimal(value: Any) -> Decimal | None:
 
 def parse_side(value: Any) -> str:
     if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "buy":
+            return "Buy"
+        if lowered == "sell":
+            return "Sell"
         return value
     if isinstance(value, dict):
         tag = value.get("tag")
         if isinstance(tag, str):
-            return tag
+            return parse_side(tag)
+        if len(value) == 1:
+            key = next(iter(value.keys()))
+            if isinstance(key, str):
+                return parse_side(key)
     return ""
 
 
@@ -59,6 +68,22 @@ def parse_party_list(value: Any) -> list[str]:
         if isinstance(item, str):
             parties.append(item)
     return parties
+
+
+def normalize_party(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.split("::", 1)[0].strip()
+
+
+def parties_match(left: Any, right: Any) -> bool:
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    if left == right:
+        return True
+    left_norm = normalize_party(left)
+    right_norm = normalize_party(right)
+    return bool(left_norm and right_norm and left_norm == right_norm)
 
 
 def load_market_data(feed_path: Path) -> dict[str, Any]:
@@ -151,6 +176,7 @@ async def query_filtered(conn: Any, template_id: str, field: str, value: str) ->
     result: dict[Any, dict[str, Any]] = {}
     async with conn.query(template_id) as stream:
         async for event in stream.creates():
-            if event.payload.get(field) == value:
+            actual = event.payload.get(field)
+            if actual == value or parties_match(actual, value):
                 result[event.contract_id] = event.payload
     return result

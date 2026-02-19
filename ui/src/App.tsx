@@ -6,7 +6,9 @@ import {
   exerciseChoice,
   getMarketApiStatus,
   queryAssetHoldings,
+  queryAuditRecords,
   queryCashHoldings,
+  queryDiscoveryInterests,
   queryPrivateNegotiations,
   setAgentAutoReprice,
   queryTradeIntents,
@@ -16,16 +18,20 @@ import type {
   AssetHoldingPayload,
   CashHoldingPayload,
   ContractRecord,
+  DiscoveryInterestPayload,
   PrivateNegotiationPayload,
+  TradeAuditRecordPayload,
   TradeIntentPayload,
   TradeSettlementPayload
 } from "./types/contracts";
 import { AgentLogsView } from "./views/AgentLogsView";
 import { ComplianceView } from "./views/ComplianceView";
+import { FlowView } from "./views/FlowView";
 import { MarketView } from "./views/MarketView";
 import { OwnerView } from "./views/OwnerView";
+import { PrivacyMatrixView } from "./views/PrivacyMatrixView";
 
-type ViewKey = "owner" | "market" | "compliance" | "logs";
+type ViewKey = "owner" | "flow" | "market" | "compliance" | "privacy" | "logs";
 
 interface MatchToastState {
   instrument: string;
@@ -75,15 +81,25 @@ function agentRoleForParty(party: string): "seller" | "buyer" | null {
   return null;
 }
 
+function errorMessageFrom(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
+function isJsonApiListLimitError(message: string): boolean {
+  return message.includes("JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED");
+}
+
 export default function App() {
   const { party, setParty, autoReprice, setAutoReprice, logs, addLog, clearLogs, availableParties, networkMode } = usePartyContext();
 
   const [activeView, setActiveView] = useState<ViewKey>("owner");
   const [tradeIntents, setTradeIntents] = useState<Array<ContractRecord<TradeIntentPayload>>>([]);
+  const [discoveryInterests, setDiscoveryInterests] = useState<Array<ContractRecord<DiscoveryInterestPayload>>>([]);
   const [negotiations, setNegotiations] = useState<Array<ContractRecord<PrivateNegotiationPayload>>>(
     []
   );
   const [settlements, setSettlements] = useState<Array<ContractRecord<TradeSettlementPayload>>>([]);
+  const [auditRecords, setAuditRecords] = useState<Array<ContractRecord<TradeAuditRecordPayload>>>([]);
   const [assetHoldings, setAssetHoldings] = useState<Array<ContractRecord<AssetHoldingPayload>>>([]);
   const [cashHoldings, setCashHoldings] = useState<Array<ContractRecord<CashHoldingPayload>>>([]);
   const [intentLastUpdate, setIntentLastUpdate] = useState<Record<string, string>>({});
@@ -95,12 +111,15 @@ export default function App() {
   const priorIntentIds = useRef<Set<string>>(new Set());
   const priorNegotiationIds = useRef<Set<string>>(new Set());
   const priorSettlementIds = useRef<Set<string>>(new Set());
+  const discoveryOverflowLogged = useRef(false);
 
   const refreshLedgerData = useCallback(async () => {
     if (party === "Public") {
       setTradeIntents([]);
+      setDiscoveryInterests([]);
       setNegotiations([]);
       setSettlements([]);
+      setAuditRecords([]);
       setAssetHoldings([]);
       setCashHoldings([]);
       setError(null);
@@ -108,69 +127,127 @@ export default function App() {
       return;
     }
     try {
-      const [nextTradeIntents, nextNegotiations, nextSettlements, nextAssets, nextCash] = await Promise.all([
+      const [tradeIntentsResult, discoveryResult, negotiationsResult, settlementsResult, auditsResult, assetsResult, cashResult] = await Promise.allSettled([
         queryTradeIntents(party),
+        queryDiscoveryInterests(party),
         queryPrivateNegotiations(party),
         queryTradeSettlements(party),
+        queryAuditRecords(party),
         queryAssetHoldings(party),
         queryCashHoldings(party),
       ]);
 
-      setTradeIntents(nextTradeIntents);
-      setNegotiations(nextNegotiations);
-      setSettlements(nextSettlements);
-      setAssetHoldings(nextAssets);
-      setCashHoldings(nextCash);
-      setError(null);
+      const failures: string[] = [];
 
-      const now = new Date().toISOString();
-      setIntentLastUpdate((prev) => {
-        const merged = { ...prev };
-        for (const intent of nextTradeIntents) {
-          merged[intent.contractId] = merged[intent.contractId] ?? now;
+      if (tradeIntentsResult.status === "fulfilled") {
+        const nextTradeIntents = tradeIntentsResult.value;
+        setTradeIntents(nextTradeIntents);
+
+        const now = new Date().toISOString();
+        setIntentLastUpdate((prev) => {
+          const merged = { ...prev };
+          for (const intent of nextTradeIntents) {
+            merged[intent.contractId] = merged[intent.contractId] ?? now;
+          }
+          return merged;
+        });
+
+        const nextIntentIds = new Set(nextTradeIntents.map((contract) => contract.contractId));
+        for (const contractId of nextIntentIds) {
+          if (!priorIntentIds.current.has(contractId)) {
+            addLog({
+              source: "ledger-event",
+              decision: "TradeIntent visible",
+              metadata: `cid=${contractId} party=${party}`
+            });
+          }
         }
-        return merged;
-      });
+        priorIntentIds.current = nextIntentIds;
+      } else {
+        failures.push(`TradeIntent: ${errorMessageFrom(tradeIntentsResult.reason)}`);
+      }
 
-      const nextIntentIds = new Set(nextTradeIntents.map((contract) => contract.contractId));
-      for (const contractId of nextIntentIds) {
-        if (!priorIntentIds.current.has(contractId)) {
-          addLog({
-            source: "ledger-event",
-            decision: "TradeIntent visible",
-            metadata: `cid=${contractId} party=${party}`
-          });
+      if (discoveryResult.status === "fulfilled") {
+        setDiscoveryInterests(discoveryResult.value);
+        discoveryOverflowLogged.current = false;
+      } else {
+        const message = errorMessageFrom(discoveryResult.reason);
+        if (isJsonApiListLimitError(message)) {
+          // Keep the dashboard usable even when this template exceeds node list limits.
+          if (!discoveryOverflowLogged.current) {
+            addLog({
+              source: "ui-action",
+              decision: "Discovery query capped by node limit",
+              metadata: "Too many DiscoveryInterest contracts visible (>200). Reset localnet or retire stale discovery contracts."
+            });
+            discoveryOverflowLogged.current = true;
+          }
+        } else {
+          failures.push(`DiscoveryInterest: ${message}`);
         }
       }
-      priorIntentIds.current = nextIntentIds;
 
-      const nextNegotiationIds = new Set(nextNegotiations.map((contract) => contract.contractId));
-      for (const negotiation of nextNegotiations) {
-        if (!priorNegotiationIds.current.has(negotiation.contractId)) {
-          addLog({
-            source: "ledger-event",
-            decision: "PrivateNegotiation created",
-            metadata: `cid=${negotiation.contractId} instrument=${negotiation.payload.instrument}`
-          });
-          setMatchToast({
-            instrument: negotiation.payload.instrument,
-            counterparty: counterpartyPseudonym(party, negotiation.payload)
-          });
-        }
-      }
-      priorNegotiationIds.current = nextNegotiationIds;
+      if (negotiationsResult.status === "fulfilled") {
+        const nextNegotiations = negotiationsResult.value;
+        setNegotiations(nextNegotiations);
 
-      const nextSettlementIds = new Set(nextSettlements.map((contract) => contract.contractId));
-      for (const contractId of nextSettlementIds) {
-        if (!priorSettlementIds.current.has(contractId)) {
-          addLog({
-            source: "ledger-event",
-            decision: "TradeSettlement created",
-            metadata: `cid=${contractId}`
-          });
+        const nextNegotiationIds = new Set(nextNegotiations.map((contract) => contract.contractId));
+        for (const negotiation of nextNegotiations) {
+          if (!priorNegotiationIds.current.has(negotiation.contractId)) {
+            addLog({
+              source: "ledger-event",
+              decision: "PrivateNegotiation created",
+              metadata: `cid=${negotiation.contractId} instrument=${negotiation.payload.instrument}`
+            });
+            setMatchToast({
+              instrument: negotiation.payload.instrument,
+              counterparty: counterpartyPseudonym(party, negotiation.payload)
+            });
+          }
         }
+        priorNegotiationIds.current = nextNegotiationIds;
+      } else {
+        failures.push(`PrivateNegotiation: ${errorMessageFrom(negotiationsResult.reason)}`);
       }
-      priorSettlementIds.current = nextSettlementIds;
+
+      if (settlementsResult.status === "fulfilled") {
+        const nextSettlements = settlementsResult.value;
+        setSettlements(nextSettlements);
+
+        const nextSettlementIds = new Set(nextSettlements.map((contract) => contract.contractId));
+        for (const contractId of nextSettlementIds) {
+          if (!priorSettlementIds.current.has(contractId)) {
+            addLog({
+              source: "ledger-event",
+              decision: "TradeSettlement created",
+              metadata: `cid=${contractId}`
+            });
+          }
+        }
+        priorSettlementIds.current = nextSettlementIds;
+      } else {
+        failures.push(`TradeSettlement: ${errorMessageFrom(settlementsResult.reason)}`);
+      }
+
+      if (auditsResult.status === "fulfilled") {
+        setAuditRecords(auditsResult.value);
+      } else {
+        failures.push(`TradeAuditRecord: ${errorMessageFrom(auditsResult.reason)}`);
+      }
+
+      if (assetsResult.status === "fulfilled") {
+        setAssetHoldings(assetsResult.value);
+      } else {
+        failures.push(`AssetHolding: ${errorMessageFrom(assetsResult.reason)}`);
+      }
+
+      if (cashResult.status === "fulfilled") {
+        setCashHoldings(cashResult.value);
+      } else {
+        failures.push(`CashHolding: ${errorMessageFrom(cashResult.reason)}`);
+      }
+
+      setError(failures.length > 0 ? failures.join(" | ") : null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown ledger error";
       setError(message);
@@ -311,21 +388,23 @@ export default function App() {
   const navItems: Array<{ key: ViewKey; label: string }> = useMemo(
     () => [
       { key: "owner", label: "Owner View" },
+      { key: "flow", label: "Live Flow View" },
       { key: "market", label: "Market View" },
       { key: "compliance", label: "Compliance View" },
+      { key: "privacy", label: "Privacy Matrix View" },
       { key: "logs", label: "Agent Logs View" }
     ],
     []
   );
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-shell-950 via-shell-900 to-shell-800 px-4 py-6 text-white md:px-8">
+    <main className="min-h-screen bg-gradient-to-br from-[#eef1f8] via-[#f8f9fd] to-[#edf1fb] px-4 py-6 text-shell-950 md:px-8">
       <div className="mx-auto max-w-7xl">
-        <header className="mb-6 rounded-2xl border border-shell-700 bg-shell-900/70 p-4 backdrop-blur">
+        <header className="mb-6 rounded-2xl border border-shell-700 bg-white/70 p-4 shadow-[0_12px_44px_rgba(36,56,99,0.08)] backdrop-blur-xl">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Agentic Shadow-Cap</p>
-              <h1 className="mt-1 text-2xl font-semibold text-signal-mint">Dark Pool Agent Console</h1>
+              <h1 className="mt-1 text-2xl font-semibold text-shell-950">Dark Pool Agent Console</h1>
               <p className="mt-1 text-sm text-signal-slate">
                 Participant endpoint: {participantLabelFor(party, networkMode)}
               </p>
@@ -334,7 +413,7 @@ export default function App() {
               <label className="text-sm text-signal-slate">
                 Party
                 <select
-                  className="ml-2 rounded-md border border-shell-700 bg-shell-950 px-2 py-1 text-white"
+                  className="ml-2 rounded-md border border-shell-700 bg-white px-2 py-1 text-shell-950"
                   value={party}
                   onChange={(event) => setParty(event.target.value)}
                 >
@@ -367,8 +446,8 @@ export default function App() {
               key={item.key}
               className={`rounded-md px-3 py-2 text-sm font-medium transition ${
                 item.key === activeView
-                  ? "bg-signal-mint text-shell-950"
-                  : "border border-shell-700 bg-shell-900/60 text-signal-slate hover:border-shell-600"
+                  ? "bg-shell-950 text-white"
+                  : "border border-shell-700 bg-white/60 backdrop-blur-xl text-signal-slate hover:border-shell-600"
               }`}
               onClick={() => setActiveView(item.key)}
             >
@@ -393,7 +472,7 @@ export default function App() {
                 </svg>
               </div>
               <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Unauthorized Perspective</p>
-              <h2 className="text-3xl font-semibold text-white">Zero Visibility</h2>
+              <h2 className="text-3xl font-semibold text-shell-950">Zero Visibility</h2>
               <p className="mx-auto max-w-md text-sm text-signal-slate">
                 Canton's sub-transaction privacy model ensures complete data isolation.
                 Without an authorized party identity, no contracts, holdings, or market
@@ -406,7 +485,7 @@ export default function App() {
                   { label: "Settlements", value: "0" },
                   { label: "Holdings", value: "0" },
                 ].map((card) => (
-                  <article key={card.label} className="rounded-xl border border-shell-700 bg-shell-900/80 p-4">
+                  <article key={card.label} className="rounded-xl border border-shell-700 bg-white/80 backdrop-blur-xl p-4">
                     <p className="text-xs uppercase tracking-[0.15em] text-signal-slate">{card.label}</p>
                     <p className="mt-2 text-3xl font-semibold text-signal-slate">{card.value}</p>
                   </article>
@@ -434,6 +513,23 @@ export default function App() {
           />
         ) : null}
 
+        {party !== "Public" && activeView === "flow" ? (
+          <FlowView
+            party={party}
+            availableParties={availableParties}
+            tradeIntents={tradeIntents}
+            discoveryInterests={discoveryInterests}
+            negotiations={negotiations}
+            settlements={settlements}
+            auditRecords={auditRecords}
+            assetHoldings={assetHoldings}
+            cashHoldings={cashHoldings}
+            onSwitchParty={setParty}
+            onRefresh={refreshLedgerData}
+            onLog={addLog}
+          />
+        ) : null}
+
         {party !== "Public" && activeView === "market" ? (
           <MarketView
             party={party}
@@ -450,6 +546,14 @@ export default function App() {
             assetHoldings={assetHoldings}
             cashHoldings={cashHoldings}
             onApproveMatch={onApproveMatch}
+          />
+        ) : null}
+
+        {party !== "Public" && activeView === "privacy" ? (
+          <PrivacyMatrixView
+            availableParties={availableParties}
+            activeParty={party}
+            refreshToken={logs.length}
           />
         ) : null}
 

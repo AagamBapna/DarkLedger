@@ -52,26 +52,26 @@ export function OwnerView({
   return (
     <section className="space-y-6">
       <div className="grid gap-4 md:grid-cols-3">
-        <article className="rounded-xl border border-shell-700 bg-shell-900/80 p-4">
+        <article className="rounded-xl border border-shell-700 bg-white/80 backdrop-blur-xl p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Private Holdings</p>
           <p className="mt-3 text-3xl font-semibold text-signal-mint">
             {tradeIntents.reduce((sum, i) => sum + numberLike(i.payload.quantity), 0).toLocaleString()}
           </p>
           <p className="mt-1 text-xs text-signal-slate">Visible only on your participant node.</p>
         </article>
-        <article className="rounded-xl border border-shell-700 bg-shell-900/80 p-4">
+        <article className="rounded-xl border border-shell-700 bg-white/80 backdrop-blur-xl p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Active Trade Intents</p>
           <p className="mt-3 text-3xl font-semibold text-signal-amber">{tradeIntents.length}</p>
           <p className="mt-1 text-xs text-signal-slate">Private inventory directives.</p>
         </article>
-        <article className="rounded-xl border border-shell-700 bg-shell-900/80 p-4">
+        <article className="rounded-xl border border-shell-700 bg-white/80 backdrop-blur-xl p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Negotiations</p>
           <p className="mt-3 text-3xl font-semibold text-signal-coral">{negotiations.length}</p>
           <p className="mt-1 text-xs text-signal-slate">Private channels visible to your party.</p>
         </article>
       </div>
 
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <h3 className="mb-3 text-lg font-semibold text-signal-mint">On-Chain Holdings</h3>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
@@ -81,8 +81,8 @@ export function OwnerView({
             ) : (
               <div className="space-y-2">
                 {assetHoldings.map((a) => (
-                  <div key={a.contractId} className="flex items-center justify-between rounded-lg border border-shell-700 bg-shell-950/60 px-3 py-2">
-                    <span className="font-medium text-white">{a.payload.instrument}</span>
+                  <div key={a.contractId} className="flex items-center justify-between rounded-lg border border-shell-700 bg-white/80 px-3 py-2">
+                    <span className="font-medium text-shell-950">{a.payload.instrument}</span>
                     <span className="text-signal-mint">{numberLike(a.payload.quantity).toLocaleString()} units</span>
                   </div>
                 ))}
@@ -96,8 +96,8 @@ export function OwnerView({
             ) : (
               <div className="space-y-2">
                 {cashHoldings.map((c) => (
-                  <div key={c.contractId} className="flex items-center justify-between rounded-lg border border-shell-700 bg-shell-950/60 px-3 py-2">
-                    <span className="font-medium text-white">{c.payload.currency}</span>
+                  <div key={c.contractId} className="flex items-center justify-between rounded-lg border border-shell-700 bg-white/80 px-3 py-2">
+                    <span className="font-medium text-shell-950">{c.payload.currency}</span>
                     <span className="text-signal-amber">${numberLike(c.payload.amount).toLocaleString()}</span>
                   </div>
                 ))}
@@ -107,7 +107,7 @@ export function OwnerView({
         </div>
       </div>
 
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-signal-mint">Active Trade Intents</h3>
           <label className="flex items-center gap-2 text-sm text-signal-slate">
@@ -141,7 +141,7 @@ export function OwnerView({
                   const draft = draftOverrides[intent.contractId] ?? currentMin.toFixed(2);
                   return (
                     <tr key={intent.contractId} className="border-b border-shell-800 text-signal-slate">
-                      <td className="py-3 font-medium text-white">{intent.payload.instrument}</td>
+                      <td className="py-3 font-medium text-shell-950">{intent.payload.instrument}</td>
                       <td className="py-3">{numberLike(intent.payload.quantity).toFixed(2)}</td>
                       <td className="py-3">{currentMin.toFixed(2)}</td>
                       <td className="py-3">
@@ -153,7 +153,7 @@ export function OwnerView({
                             type="number"
                             min="0"
                             step="0.01"
-                            className="w-32 rounded-md border border-shell-700 bg-shell-950 px-2 py-1 text-white"
+                            className="w-32 rounded-md border border-shell-700 bg-white px-2 py-1 text-shell-950"
                             value={draft}
                             onChange={(e) =>
                               setDraftOverrides((prev) => ({ ...prev, [intent.contractId]: e.target.value }))
@@ -178,7 +178,7 @@ export function OwnerView({
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+        <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
           <h3 className="mb-3 text-lg font-semibold text-signal-amber">Private Negotiations</h3>
           {negotiations.length === 0 ? (
             <p className="text-sm text-signal-slate">No active PrivateNegotiation contracts.</p>
@@ -188,8 +188,8 @@ export function OwnerView({
                 const qty = optionalToNumber(n.payload.proposedQty);
                 const price = optionalToNumber(n.payload.proposedUnitPrice);
                 return (
-                  <article key={n.contractId} className="rounded-lg border border-shell-700 bg-shell-950/60 p-3">
-                    <p className="font-semibold text-white">{n.payload.instrument}</p>
+                  <article key={n.contractId} className="rounded-lg border border-shell-700 bg-white/80 p-3">
+                    <p className="font-semibold text-shell-950">{n.payload.instrument}</p>
                     <div className="mt-1 flex gap-3 text-xs text-signal-slate">
                       <span className={n.payload.sellerAccepted ? "text-signal-mint" : ""}>
                         Seller: {n.payload.sellerAccepted ? "Accepted" : "Pending"}
@@ -214,15 +214,15 @@ export function OwnerView({
         <NewsInjector />
       </div>
 
-      <div className="rounded-xl border border-shell-700 bg-shell-900/70 p-4">
+      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
         <h3 className="mb-3 text-lg font-semibold text-signal-coral">Agent Activity Timeline</h3>
         {timeline.length === 0 ? (
           <p className="text-sm text-signal-slate">No agent activity logged yet.</p>
         ) : (
           <ul className="space-y-2 text-sm">
             {timeline.map((entry) => (
-              <li key={entry.id} className="rounded-md border border-shell-800 bg-shell-950/60 p-2">
-                <p className="font-medium text-white">{entry.decision}</p>
+              <li key={entry.id} className="rounded-md border border-shell-800 bg-white/80 p-2">
+                <p className="font-medium text-shell-950">{entry.decision}</p>
                 <p className="text-xs text-signal-slate">{entry.metadata}</p>
                 <p className="text-xs text-signal-slate">{new Date(entry.at).toLocaleString()}</p>
               </li>

@@ -26,6 +26,7 @@ from common import (
     optional_decimal,
     parse_side,
     make_side,
+    parties_match,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -78,90 +79,94 @@ class SellerAgent(BaseAgent):
 
     async def _repricing_loop(self) -> None:
         while True:
-            market_data = self.market_data()
-            controls = self.agent_controls()
-            seller_auto_reprice = bool(controls.get("seller_auto_reprice", True))
+            try:
+                market_data = self.market_data()
+                controls = self.agent_controls()
+                seller_auto_reprice = bool(controls.get("seller_auto_reprice", True))
 
-            tid = self.ctx.template_ids
-            intents = await self.query(tid["trade_intent"])
-            discoveries = await self.query(tid["discovery"])
+                tid = self.ctx.template_ids
+                intents = await self.query(tid["trade_intent"])
+                discoveries = await self.query(tid["discovery"])
 
-            # Track which instruments already have active sell signals
-            own_active_sell: set[str] = set()
-            for payload in discoveries.values():
-                instrument = payload.get("instrument", "")
-                if (
-                    payload.get("postingAgent") == self.ctx.agent_party
-                    and parse_side(payload.get("side")) == "Sell"
-                    and instrument
-                ):
-                    own_active_sell.add(instrument)
-
-            for cid, payload in list(intents.items()):
-                instrument = payload["instrument"]
-                current = to_decimal(payload["minPrice"])
-
-                # Post DiscoveryInterest if not already active for this instrument
-                if instrument not in own_active_sell:
-                    discoverable_by = [p for p in [self.ctx.counterparty_agent_party] if p]
-                    try:
-                        await self.create(tid["discovery"], {
-                            "issuer": payload["issuer"],
-                            "owner": payload["seller"],
-                            "postingAgent": self.ctx.agent_party,
-                            "discoverableBy": discoverable_by,
-                            "instrument": instrument,
-                            "side": make_side("Sell"),
-                            "strategyTag": self.DISCOVERY_STRATEGY_TAG,
-                        })
+                # Track which instruments already have active sell signals
+                own_active_sell: set[str] = set()
+                for payload in discoveries.values():
+                    instrument = payload.get("instrument", "")
+                    posting_agent = payload.get("postingAgent", "")
+                    if (
+                        parties_match(posting_agent, self.ctx.agent_party)
+                        and parse_side(payload.get("side")) == "Sell"
+                        and instrument
+                    ):
                         own_active_sell.add(instrument)
-                        self.log.info("[agent] posted sell DiscoveryInterest for %s", instrument)
+
+                for cid, payload in list(intents.items()):
+                    instrument = payload["instrument"]
+                    current = to_decimal(payload["minPrice"])
+
+                    # Post DiscoveryInterest if not already active for this instrument
+                    if instrument not in own_active_sell:
+                        discoverable_by = [p for p in [self.ctx.counterparty_agent_party] if p]
+                        try:
+                            await self.create(tid["discovery"], {
+                                "issuer": payload["issuer"],
+                                "owner": payload["seller"],
+                                "postingAgent": self.ctx.agent_party,
+                                "discoverableBy": discoverable_by,
+                                "instrument": instrument,
+                                "side": make_side("Sell"),
+                                "strategyTag": self.DISCOVERY_STRATEGY_TAG,
+                            })
+                            own_active_sell.add(instrument)
+                            self.log.info("[agent] posted sell DiscoveryInterest for %s", instrument)
+                        except Exception as ex:
+                            self.log.warning("[agent] DiscoveryInterest failed: %s", ex)
+
+                    if instrument not in self._original_prices:
+                        self._original_prices[instrument] = current
+
+                    if not seller_auto_reprice:
+                        continue
+
+                    # Cooldown to prevent thrashing
+                    now = _time.monotonic()
+                    last_t = self._last_reprice_time.get(cid, 0.0)
+                    if now - last_t < REPRICE_COOLDOWN_SECONDS:
+                        continue
+
+                    advice = get_pricing_advice(instrument, current, market_data, "seller")
+
+                    if advice.action == "hold":
+                        continue
+
+                    if advice.action == "archive":
+                        self.log.info("[agent] recommends archiving intent for %s: %s", instrument, advice.reasoning[:80])
+                        await self.log_agent_decision(instrument, advice, market_data)
+                        continue
+
+                    # Clamp to absolute floor (60% of original price)
+                    candidate = advice.recommended_price
+                    absolute_floor = self._original_prices[instrument] * ABSOLUTE_FLOOR_RATIO
+                    if candidate < absolute_floor:
+                        self.log.warning(
+                            "[agent] clamping %s price %s -> floor %s (60%% of original %s)",
+                            instrument, candidate, absolute_floor, self._original_prices[instrument],
+                        )
+                        candidate = absolute_floor
+
+                    delta = abs(candidate - current)
+                    if delta < self.MIN_TICK_CHANGE or candidate <= Decimal("0"):
+                        continue
+
+                    self.log.info("[agent] repricing %s: %s -> %s (reason: %s)", instrument, current, candidate, advice.reasoning[:60])
+                    try:
+                        await self.exercise(cid, "UpdatePrice", {"newMinPrice": str(candidate)})
+                        self._last_reprice_time[cid] = _time.monotonic()
+                        await self.log_agent_decision(instrument, advice, market_data)
                     except Exception as ex:
-                        self.log.warning("[agent] DiscoveryInterest failed: %s", ex)
-
-                if instrument not in self._original_prices:
-                    self._original_prices[instrument] = current
-
-                if not seller_auto_reprice:
-                    continue
-
-                # Cooldown to prevent thrashing
-                now = _time.monotonic()
-                last_t = self._last_reprice_time.get(cid, 0.0)
-                if now - last_t < REPRICE_COOLDOWN_SECONDS:
-                    continue
-
-                advice = get_pricing_advice(instrument, current, market_data, "seller")
-
-                if advice.action == "hold":
-                    continue
-
-                if advice.action == "archive":
-                    self.log.info("[agent] recommends archiving intent for %s: %s", instrument, advice.reasoning[:80])
-                    await self.log_agent_decision(instrument, advice, market_data)
-                    continue
-
-                # Clamp to absolute floor (60% of original price)
-                candidate = advice.recommended_price
-                absolute_floor = self._original_prices[instrument] * ABSOLUTE_FLOOR_RATIO
-                if candidate < absolute_floor:
-                    self.log.warning(
-                        "[agent] clamping %s price %s -> floor %s (60%% of original %s)",
-                        instrument, candidate, absolute_floor, self._original_prices[instrument],
-                    )
-                    candidate = absolute_floor
-
-                delta = abs(candidate - current)
-                if delta < self.MIN_TICK_CHANGE or candidate <= Decimal("0"):
-                    continue
-
-                self.log.info("[agent] repricing %s: %s -> %s (reason: %s)", instrument, current, candidate, advice.reasoning[:60])
-                try:
-                    await self.exercise(cid, "UpdatePrice", {"newMinPrice": str(candidate)})
-                    self._last_reprice_time[cid] = _time.monotonic()
-                    await self.log_agent_decision(instrument, advice, market_data)
-                except Exception as ex:
-                    self.log.error("[agent] repricing failed: %s", ex)
+                        self.log.error("[agent] repricing failed: %s", ex)
+            except Exception as ex:
+                self.log.warning("[agent] repricing loop iteration failed: %s", ex)
 
             await self.sleep()
 
@@ -169,50 +174,53 @@ class SellerAgent(BaseAgent):
 
     async def _negotiation_loop(self) -> None:
         while True:
-            market_data = self.market_data()
-            tid = self.ctx.template_ids
-            intents = await self.query(tid["trade_intent"])
-            negotiations = await self.query_by_field(tid["negotiation"], "sellerAgent", self.ctx.agent_party)
+            try:
+                market_data = self.market_data()
+                tid = self.ctx.template_ids
+                intents = await self.query(tid["trade_intent"])
+                negotiations = await self.query_by_field(tid["negotiation"], "sellerAgent", self.ctx.agent_party)
 
-            for cid, payload in list(negotiations.items()):
-                if cid in self._negotiation_processed:
-                    continue
-
-                proposed_qty = optional_decimal(payload.get("proposedQty"))
-                proposed_price = optional_decimal(payload.get("proposedUnitPrice"))
-                seller_accepted = bool(payload.get("sellerAccepted", False))
-                buyer_accepted = bool(payload.get("buyerAccepted", False))
-                instrument = payload.get("instrument", "")
-
-                intent = next((p for p in intents.values() if p.get("instrument") == instrument), None)
-                if intent is None:
-                    continue
-
-                min_price = to_decimal(intent["minPrice"])
-                qty = to_decimal(intent["quantity"])
-
-                try:
-                    if proposed_qty is None:
-                        # Submit initial terms
-                        self.log.info("[negotiation] submitting initial terms: qty=%s price=%s", qty, min_price)
-                        await self.exercise(cid, "SubmitSellerTerms", {"qty": str(qty), "unitPrice": str(min_price)})
-                        self._negotiation_processed.add(cid)
+                for cid, payload in list(negotiations.items()):
+                    if cid in self._negotiation_processed:
                         continue
 
-                    if buyer_accepted and not seller_accepted and proposed_price is not None:
-                        advice = get_negotiation_advice(instrument, proposed_price, min_price, market_data, "seller")
-                        await self.log_agent_decision(instrument, advice, market_data)
+                    proposed_qty = optional_decimal(payload.get("proposedQty"))
+                    proposed_price = optional_decimal(payload.get("proposedUnitPrice"))
+                    seller_accepted = bool(payload.get("sellerAccepted", False))
+                    buyer_accepted = bool(payload.get("buyerAccepted", False))
+                    instrument = payload.get("instrument", "")
 
-                        if advice.action == "accept":
-                            self.log.info("[negotiation] accepting: %s (reason: %s)", proposed_price, advice.reasoning[:60])
-                            await self.exercise(cid, "AcceptBySeller", {})
-                        else:
-                            counter = advice.recommended_price
-                            self.log.info("[negotiation] countering at %s (reason: %s)", counter, advice.reasoning[:60])
-                            await self.exercise(cid, "SubmitSellerTerms", {"qty": str(qty), "unitPrice": str(counter)})
-                        self._negotiation_processed.add(cid)
-                except Exception as ex:
-                    self.log.error("[negotiation] failed: %s", ex)
+                    intent = next((p for p in intents.values() if p.get("instrument") == instrument), None)
+                    if intent is None:
+                        continue
+
+                    min_price = to_decimal(intent["minPrice"])
+                    qty = to_decimal(intent["quantity"])
+
+                    try:
+                        if proposed_qty is None:
+                            # Submit initial terms
+                            self.log.info("[negotiation] submitting initial terms: qty=%s price=%s", qty, min_price)
+                            await self.exercise(cid, "SubmitSellerTerms", {"qty": str(qty), "unitPrice": str(min_price)})
+                            self._negotiation_processed.add(cid)
+                            continue
+
+                        if buyer_accepted and not seller_accepted and proposed_price is not None:
+                            advice = get_negotiation_advice(instrument, proposed_price, min_price, market_data, "seller")
+                            await self.log_agent_decision(instrument, advice, market_data)
+
+                            if advice.action == "accept":
+                                self.log.info("[negotiation] accepting: %s (reason: %s)", proposed_price, advice.reasoning[:60])
+                                await self.exercise(cid, "AcceptBySeller", {})
+                            else:
+                                counter = advice.recommended_price
+                                self.log.info("[negotiation] countering at %s (reason: %s)", counter, advice.reasoning[:60])
+                                await self.exercise(cid, "SubmitSellerTerms", {"qty": str(qty), "unitPrice": str(counter)})
+                            self._negotiation_processed.add(cid)
+                    except Exception as ex:
+                        self.log.error("[negotiation] failed: %s", ex)
+            except Exception as ex:
+                self.log.warning("[agent] negotiation loop iteration failed: %s", ex)
 
             await self.sleep()
 
