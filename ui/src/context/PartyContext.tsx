@@ -17,7 +17,7 @@ const PartyContext = createContext<PartyContextShape | undefined>(undefined);
 
 const MAX_LOG_ENTRIES = 250;
 
-const DEFAULT_PARTIES: Party[] = ["Seller", "SellerAgent", "Buyer", "BuyerAgent", "Company", "Public"];
+const DEFAULT_PARTIES: Party[] = ["Seller", "SellerAgent", "Buyer", "BuyerAgent", "Company", "Outsider"];
 
 export const partyOptions: Party[] = DEFAULT_PARTIES;
 
@@ -40,9 +40,9 @@ export function PartyProvider({ children }: { children: ReactNode }) {
         const data = await response.json() as { result?: Array<{ displayName?: string; identifier: string }> };
         const parties = (data.result ?? [])
           .map((p) => p.displayName || p.identifier)
-          .filter((name) => name && name !== "Public");
+          .filter((name) => name);
         if (!cancelled && parties.length > 0) {
-          setAvailableParties([...parties, "Public"]);
+          setAvailableParties(Array.from(new Set(parties)));
         }
       } catch {
         // Fall back to defaults

@@ -5,6 +5,7 @@ Shared utilities for Agentic Shadow-Cap agents.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -27,6 +28,13 @@ def to_decimal(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+def decimal_to_text(value: Decimal) -> str:
+    text = format(value.normalize(), "f")
+    if "." not in text:
+        return f"{text}.0"
+    return text
+
+
 def optional_decimal(value: Any) -> Decimal | None:
     if value is None:
         return None
@@ -35,6 +43,21 @@ def optional_decimal(value: Any) -> Decimal | None:
     if isinstance(value, dict) and value.get("tag") == "Some":
         return to_decimal(value.get("value"))
     return to_decimal(value)
+
+
+def optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        tag = value.get("tag")
+        if tag == "None":
+            return None
+        if tag == "Some":
+            inner = value.get("value")
+            return inner if isinstance(inner, str) else None
+    return None
 
 
 def parse_side(value: Any) -> str:
@@ -111,6 +134,52 @@ def load_agent_controls(control_path: Path) -> dict[str, Any]:
         }
     except Exception:
         return dict(DEFAULT_AGENT_CONTROLS)
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def parse_ledger_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def commitment_hash(qty_text: str, unit_price_text: str, salt: str) -> str:
+    raw = f"{qty_text}|{unit_price_text}|{salt}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def commitment_salt(
+    agent_party: str,
+    instrument: str,
+    qty_text: str,
+    unit_price_text: str,
+) -> str:
+    raw = f"{agent_party}|{instrument}|{qty_text}|{unit_price_text}|shadowcap-commit-v1"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def discovery_is_expired(payload: dict[str, Any], *, now: datetime | None = None) -> bool:
+    expiry = parse_ledger_time(payload.get("expiresAt"))
+    if expiry is None:
+        return False
+    at = now or utc_now()
+    return expiry <= at
 
 
 async def retry_exercise(conn: Any, cid: Any, choice: str, args: dict, retries: int = 3) -> Any:

@@ -31,7 +31,7 @@ def _csv_list(value: str) -> list[str]:
 
 
 PROVIDER_ALIASES = _csv_list(
-    os.getenv("CANTON_PROVIDER_ALIASES", "Seller,SellerAgent,Company")
+    os.getenv("CANTON_PROVIDER_ALIASES", "Seller,SellerAgent,Company,Outsider")
 )
 USER_ALIASES = _csv_list(
     os.getenv("CANTON_USER_ALIASES", "Buyer,BuyerAgent")

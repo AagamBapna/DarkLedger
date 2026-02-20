@@ -137,6 +137,19 @@ else:
 " 2>/dev/null
 }
 
+commitment_hash() {
+  local qty_text="$1"
+  local unit_price_text="$2"
+  local salt="$3"
+  python3 - "$qty_text" "$unit_price_text" "$salt" <<'PY'
+import hashlib
+import sys
+
+qty_text, unit_price_text, salt = sys.argv[1], sys.argv[2], sys.argv[3]
+print(hashlib.sha256(f"{qty_text}|{unit_price_text}|{salt}".encode("utf-8")).hexdigest())
+PY
+}
+
 step() {
   STEP=$((STEP + 1))
   echo -e "\n${YELLOW}[Step $STEP] $1${NC}"
@@ -217,6 +230,17 @@ INTENT_CID="$NEW_INTENT_CID"
 
 step "SellerAgent posts blind DiscoveryInterest (Sell)"
 
+DISCOVERY_CREATED_AT=$(python3 - <<'PY'
+from datetime import datetime, timezone
+print(datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+PY
+)
+DISCOVERY_EXPIRES_AT=$(python3 - <<'PY'
+from datetime import datetime, timedelta, timezone
+print((datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace("+00:00", "Z"))
+PY
+)
+
 SELL_DISC_RESULT=$(api_create "SellerAgent" "DiscoveryInterest" '{
   "issuer": "Company",
   "owner": "Seller",
@@ -224,7 +248,9 @@ SELL_DISC_RESULT=$(api_create "SellerAgent" "DiscoveryInterest" '{
   "discoverableBy": ["BuyerAgent"],
   "instrument": "TEST-LIFECYCLE",
   "side": {"tag":"Sell","value":{}},
-  "strategyTag": "LIFECYCLE_TEST_SELL"
+  "strategyTag": "LIFECYCLE_TEST_SELL",
+  "createdAt": "'"${DISCOVERY_CREATED_AT}"'",
+  "expiresAt": "'"${DISCOVERY_EXPIRES_AT}"'"
 }')
 SELL_DISC_CID=$(echo "$SELL_DISC_RESULT" | extract_cid)
 [[ -n "$SELL_DISC_CID" ]] && ok "Sell DiscoveryInterest cid=$SELL_DISC_CID" || fail_exit "Failed to post sell signal"
@@ -240,7 +266,9 @@ BUY_DISC_RESULT=$(api_create "BuyerAgent" "DiscoveryInterest" '{
   "discoverableBy": ["SellerAgent"],
   "instrument": "TEST-LIFECYCLE",
   "side": {"tag":"Buy","value":{}},
-  "strategyTag": "LIFECYCLE_TEST_BUY"
+  "strategyTag": "LIFECYCLE_TEST_BUY",
+  "createdAt": "'"${DISCOVERY_CREATED_AT}"'",
+  "expiresAt": "'"${DISCOVERY_EXPIRES_AT}"'"
 }')
 BUY_DISC_CID=$(echo "$BUY_DISC_RESULT" | extract_cid)
 [[ -n "$BUY_DISC_CID" ]] && ok "Buy DiscoveryInterest cid=$BUY_DISC_CID" || fail_exit "Failed to post buy signal"
@@ -278,6 +306,31 @@ NEG_CID=$(echo "$ACCEPT2_RESULT" | extract_exercise_cid)
 [[ -n "$NEG_CID" ]] && ok "Seller accepted: new cid=$NEG_CID" || fail_exit "AcceptBySeller failed"
 
 # ── Step 11: Issuer approves (ROFR/compliance) ──────────────
+
+step "Commit and reveal terms before issuer approval"
+
+QTY_TEXT="1000.0"
+PRICE_TEXT="105.0"
+SELLER_SALT="lifecycle-seller-salt"
+BUYER_SALT="lifecycle-buyer-salt"
+SELLER_HASH=$(commitment_hash "$QTY_TEXT" "$PRICE_TEXT" "$SELLER_SALT")
+BUYER_HASH=$(commitment_hash "$QTY_TEXT" "$PRICE_TEXT" "$BUYER_SALT")
+
+COMMIT_SELL_RESULT=$(api_exercise "SellerAgent" "PrivateNegotiation" "$NEG_CID" "CommitTerms" "{\"side\":{\"tag\":\"Sell\",\"value\":{}},\"commitmentHash\":\"$SELLER_HASH\"}")
+NEG_CID=$(echo "$COMMIT_SELL_RESULT" | extract_exercise_cid)
+[[ -n "$NEG_CID" ]] && ok "Seller committed hash: new cid=$NEG_CID" || fail_exit "CommitTerms (seller) failed"
+
+COMMIT_BUY_RESULT=$(api_exercise "BuyerAgent" "PrivateNegotiation" "$NEG_CID" "CommitTerms" "{\"side\":{\"tag\":\"Buy\",\"value\":{}},\"commitmentHash\":\"$BUYER_HASH\"}")
+NEG_CID=$(echo "$COMMIT_BUY_RESULT" | extract_exercise_cid)
+[[ -n "$NEG_CID" ]] && ok "Buyer committed hash: new cid=$NEG_CID" || fail_exit "CommitTerms (buyer) failed"
+
+REVEAL_SELL_RESULT=$(api_exercise "SellerAgent" "PrivateNegotiation" "$NEG_CID" "RevealTerms" "{\"side\":{\"tag\":\"Sell\",\"value\":{}},\"qtyText\":\"$QTY_TEXT\",\"unitPriceText\":\"$PRICE_TEXT\",\"salt\":\"$SELLER_SALT\"}")
+NEG_CID=$(echo "$REVEAL_SELL_RESULT" | extract_exercise_cid)
+[[ -n "$NEG_CID" ]] && ok "Seller revealed terms: new cid=$NEG_CID" || fail_exit "RevealTerms (seller) failed"
+
+REVEAL_BUY_RESULT=$(api_exercise "BuyerAgent" "PrivateNegotiation" "$NEG_CID" "RevealTerms" "{\"side\":{\"tag\":\"Buy\",\"value\":{}},\"qtyText\":\"$QTY_TEXT\",\"unitPriceText\":\"$PRICE_TEXT\",\"salt\":\"$BUYER_SALT\"}")
+NEG_CID=$(echo "$REVEAL_BUY_RESULT" | extract_exercise_cid)
+[[ -n "$NEG_CID" ]] && ok "Buyer revealed terms: new cid=$NEG_CID" || fail_exit "RevealTerms (buyer) failed"
 
 step "Issuer exercises ApproveMatch (ROFR gate)"
 

@@ -70,6 +70,40 @@ Streaming log table showing agent decision history.
 - **Decision**: `repriced`, `skipped`, `submitted-choice`, `accepted`, `countered`
 - **Metadata**: Volatility, old/new price, contract ID
 
+### Privacy Theater Additions (Judge Mode)
+
+- **Live visibility shock switch** in app shell:
+  - Pick a contract/template and flip Seller vs Outsider instantly.
+  - Demonstrates same contract ID visibility for authorized vs unauthorized party.
+- **Red-team Outsider panel**:
+  - `Try to spy` button runs outsider probes and logs `private-denied` outcomes.
+- **Commit-reveal theater** in Live Flow:
+  - Displays seller/buyer commitment hashes first.
+  - Reveals exact qty/price only after both reveals (or issuer context).
+- **Timeline replay mode**:
+  - Animated `Intent -> Discovery -> Negotiation -> Approval -> Settlement` stepper.
+  - Per-step “who can see this” badges.
+- **Counterparty masking UX**:
+  - Non-issuer negotiation views show pseudonyms (for example `Buyer-7F2A`).
+  - Issuer/settlement context reveals real identities.
+- **Privacy heatmap view**:
+  - Party x template matrix with live green/red cells and counts.
+- **Leak comparison panel**:
+  - Side-by-side “public order-book leak world” vs Canton private execution.
+- **Live invariant banners**:
+  - `Outsider Visibility`, `Replay Attack`, `Expired Discovery`, and visibility-shock status.
+- **Mobile polish**:
+  - Touch-friendly party chips and responsive proof cards for phone walkthroughs.
+
+### Quick Judge Script (2-5 min)
+
+1. Run `Run Full Private Trade (Judge Mode)` in `Live Flow View`.
+2. At first pause, use visibility shock switch (Seller -> Outsider).
+3. Continue to commit/reveal pause and highlight hash-first theater.
+4. Open `Privacy Matrix View` and point at Outsider row (zero/hidden).
+5. Switch to Outsider and click `Try to spy` for private-denied logs.
+6. Finish on settlement/compliance and audit output.
+
 ---
 
 ## Environment Variables

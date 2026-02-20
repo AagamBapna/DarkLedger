@@ -1,0 +1,19 @@
+sdk-version: 3.4.10
+name: agentic-shadow-cap-test
+version: 0.1.0
+source: src
+parties:
+  - Seller
+  - SellerAgent
+  - Buyer
+  - BuyerAgent
+  - Company
+  - Outsider
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies:
+  - ../daml/.daml/dist/agentic-shadow-cap-0.1.0.dar
+init-script: AgenticShadowCap.MvpScript:mvpBootstrap
+start-navigator: false

@@ -16,6 +16,7 @@ import asyncio
 import os
 import logging
 import time as _time
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -23,10 +24,17 @@ from base_agent import BaseAgent, AgentContext
 from llm_advisor import get_pricing_advice, get_negotiation_advice
 from common import (
     to_decimal,
+    decimal_to_text,
     optional_decimal,
+    optional_text,
     parse_side,
     make_side,
     parties_match,
+    utc_now,
+    iso_utc,
+    discovery_is_expired,
+    commitment_salt,
+    commitment_hash,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -65,6 +73,7 @@ class SellerAgent(BaseAgent):
     MIN_TICK_CHANGE = Decimal(os.getenv("MIN_TICK_CHANGE", "0.01"))
     COUNTER_OFFER_MARKUP = Decimal(os.getenv("SELLER_COUNTER_MARKUP", "1.00"))
     DISCOVERY_STRATEGY_TAG = os.getenv("SELLER_DISCOVERY_STRATEGY", "SELL_WHISPER")
+    DISCOVERY_TTL_SECONDS = int(os.getenv("DISCOVERY_TTL_SECONDS", "300"))
 
     def __init__(self, context: AgentContext) -> None:
         super().__init__(context)
@@ -90,7 +99,8 @@ class SellerAgent(BaseAgent):
 
                 # Track which instruments already have active sell signals
                 own_active_sell: set[str] = set()
-                for payload in discoveries.values():
+                now_dt = utc_now()
+                for discovery_cid, payload in list(discoveries.items()):
                     instrument = payload.get("instrument", "")
                     posting_agent = payload.get("postingAgent", "")
                     if (
@@ -98,6 +108,13 @@ class SellerAgent(BaseAgent):
                         and parse_side(payload.get("side")) == "Sell"
                         and instrument
                     ):
+                        if discovery_is_expired(payload, now=now_dt):
+                            try:
+                                await self.exercise(discovery_cid, "ExpireInterest", {})
+                                self.log.info("[agent] expired stale sell DiscoveryInterest %s", discovery_cid)
+                            except Exception as ex:
+                                self.log.warning("[agent] failed to expire stale DiscoveryInterest %s: %s", discovery_cid, ex)
+                            continue
                         own_active_sell.add(instrument)
 
                 for cid, payload in list(intents.items()):
@@ -108,6 +125,8 @@ class SellerAgent(BaseAgent):
                     if instrument not in own_active_sell:
                         discoverable_by = [p for p in [self.ctx.counterparty_agent_party] if p]
                         try:
+                            created_at = iso_utc(now_dt)
+                            expires_at = iso_utc(now_dt + timedelta(seconds=self.DISCOVERY_TTL_SECONDS))
                             await self.create(tid["discovery"], {
                                 "issuer": payload["issuer"],
                                 "owner": payload["seller"],
@@ -116,6 +135,8 @@ class SellerAgent(BaseAgent):
                                 "instrument": instrument,
                                 "side": make_side("Sell"),
                                 "strategyTag": self.DISCOVERY_STRATEGY_TAG,
+                                "createdAt": created_at,
+                                "expiresAt": expires_at,
                             })
                             own_active_sell.add(instrument)
                             self.log.info("[agent] posted sell DiscoveryInterest for %s", instrument)
@@ -188,6 +209,8 @@ class SellerAgent(BaseAgent):
                     proposed_price = optional_decimal(payload.get("proposedUnitPrice"))
                     seller_accepted = bool(payload.get("sellerAccepted", False))
                     buyer_accepted = bool(payload.get("buyerAccepted", False))
+                    seller_terms_revealed = bool(payload.get("sellerTermsRevealed", False))
+                    seller_commit_hash = optional_text(payload.get("sellerCommitmentHash"))
                     instrument = payload.get("instrument", "")
 
                     intent = next((p for p in intents.values() if p.get("instrument") == instrument), None)
@@ -216,6 +239,29 @@ class SellerAgent(BaseAgent):
                                 counter = advice.recommended_price
                                 self.log.info("[negotiation] countering at %s (reason: %s)", counter, advice.reasoning[:60])
                                 await self.exercise(cid, "SubmitSellerTerms", {"qty": str(qty), "unitPrice": str(counter)})
+                            self._negotiation_processed.add(cid)
+                            continue
+
+                        if proposed_qty is not None and proposed_price is not None and seller_accepted and not seller_terms_revealed:
+                            qty_text = decimal_to_text(proposed_qty)
+                            price_text = decimal_to_text(proposed_price)
+                            salt = commitment_salt(self.ctx.agent_party, instrument, qty_text, price_text)
+                            expected_hash = commitment_hash(qty_text, price_text, salt)
+
+                            if seller_commit_hash != expected_hash:
+                                self.log.info("[negotiation] committing seller term hash for %s", instrument)
+                                await self.exercise(cid, "CommitTerms", {
+                                    "side": make_side("Sell"),
+                                    "commitmentHash": expected_hash,
+                                })
+                            else:
+                                self.log.info("[negotiation] revealing seller terms for %s", instrument)
+                                await self.exercise(cid, "RevealTerms", {
+                                    "side": make_side("Sell"),
+                                    "qtyText": qty_text,
+                                    "unitPriceText": price_text,
+                                    "salt": salt,
+                                })
                             self._negotiation_processed.add(cid)
                     except Exception as ex:
                         self.log.error("[negotiation] failed: %s", ex)

@@ -15,7 +15,7 @@ const JSON_API_URL = import.meta.env.VITE_JSON_API_URL ?? "http://localhost:7575
 const MARKET_API_URL = import.meta.env.VITE_MARKET_API_URL ?? "http://localhost:8090";
 const STATIC_TOKEN = import.meta.env.VITE_JSON_API_TOKEN;
 const USE_INSECURE_TOKENS =
-  (import.meta.env.VITE_JSON_API_USE_INSECURE_TOKEN ?? "true").toLowerCase() === "true";
+  (import.meta.env.VITE_JSON_API_USE_INSECURE_TOKEN ?? "false").toLowerCase() === "true";
 
 const PACKAGE_ID = import.meta.env.VITE_PACKAGE_ID ?? "";
 const pkgPrefix = PACKAGE_ID ? `${PACKAGE_ID}:` : "";

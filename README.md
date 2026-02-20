@@ -231,6 +231,27 @@ Switch between parties to see Canton's privacy model in action:
 - **Compliance View**: Negotiation approval queue, DvP settlement visualization with step progress, immutable audit trail
 - **Agent Logs View**: On-ledger AI decision reasoning with expandable market context details
 
+### Judge-Facing Privacy Theater Features
+- **Live visibility shock switch**: Compare Seller vs Outsider on the same contract ID and watch unauthorized visibility drop to zero.
+- **Commit-reveal theater**: Hash commitments shown first; exact terms appear only after both reveals.
+- **Red-team panel**: `Try to spy` probe from Outsider perspective writes explicit `private-denied` logs.
+- **Timeline replay mode**: Animated stepper from `Intent -> Discovery -> Negotiation -> Approval -> Settlement` with per-step visibility badges.
+- **Counterparty masking UX**: Negotiation views show pseudonyms (for example `Buyer-7F2A`), while issuer/settlement context reveals real identities.
+- **Privacy heatmap**: Live green/red party-template matrix refreshed after each action.
+- **Leak comparison**: Side-by-side mock public order-book leakage vs Canton private flow.
+- **Judge mode script**: One-click full private trade workflow with pause points at key proof moments.
+- **Live invariant banners**: Runtime badges for outsider visibility, replay resistance, and expired discovery handling.
+- **Mobile walkthrough polish**: Touch-friendly party chips and responsive proof cards for phone judging.
+
+### 2-5 Minute Judge Walkthrough
+1. Open the app and point to invariant banners (`Outsider Visibility`, `Replay Attack`, `Expired Discovery`).
+2. Use **Run Full Private Trade (Judge Mode)** in **Live Flow View** and pause at proof checkpoints.
+3. At the first pause, use the **visibility shock switch** to flip Seller -> Outsider on one contract ID.
+4. Resume and show **commit-reveal theater**: hashes first, terms only after both reveals.
+5. Show **privacy heatmap** updates (Party x Template matrix), especially Outsider row staying zero/red.
+6. Switch to Outsider and run **Try to spy** to generate `private-denied` red-team logs.
+7. Show settlement/audit completion in Compliance and close with the leak comparison panel.
+
 ## Deployment
 
 ### Docker Compose (`deploy/docker-compose.yml`)

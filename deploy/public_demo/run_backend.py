@@ -23,7 +23,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DAML_DIR = ROOT / "daml"
+DAML_TEST_DIR = ROOT / "daml-test"
 DAR_FILE = DAML_DIR / ".daml/dist/agentic-shadow-cap-0.1.0.dar"
+SCRIPT_DAR_FILE = DAML_TEST_DIR / ".daml/dist/agentic-shadow-cap-test-0.1.0.dar"
 
 LEDGER_PORT = int(os.getenv("LEDGER_PORT", "6865"))
 JSON_API_PORT = int(os.getenv("JSON_API_PORT", "7575"))
@@ -222,7 +224,9 @@ def _discover_package_id() -> str:
 
 
 def _bootstrap_and_seed(package_id: str) -> None:
-    script_cmd = _script_command(DAR_FILE)
+    if not SCRIPT_DAR_FILE.exists():
+        raise FileNotFoundError(f"Missing script DAR file: {SCRIPT_DAR_FILE}")
+    script_cmd = _script_command(SCRIPT_DAR_FILE)
     max_attempts = 30
     for attempt in range(1, max_attempts + 1):
         _log(f"run bootstrap script (attempt {attempt}/{max_attempts})")
@@ -309,11 +313,14 @@ def main() -> int:
         run_agents = RUN_AGENTS
         if not SKIP_BUILD:
             _run_blocking([da_cli, "build"], cwd=DAML_DIR)
+            _run_blocking([da_cli, "build"], cwd=DAML_TEST_DIR)
         else:
             _log("SKIP_BUILD=true, reusing existing DAR")
 
         if not DAR_FILE.exists():
             raise FileNotFoundError(f"Missing DAR file: {DAR_FILE}")
+        if not SCRIPT_DAR_FILE.exists():
+            raise FileNotFoundError(f"Missing script DAR file: {SCRIPT_DAR_FILE}")
 
         package_id = _discover_package_id()
         _log(f"package ID: {package_id}")
@@ -333,7 +340,7 @@ def main() -> int:
             "CANTON_ALLOW_INSECURE_TOKEN": "true",
             "CANTON_INSECURE_TOKEN_MODE": "legacy",
             "CANTON_TRUST_CLIENT_AUTH": "false",
-            "CANTON_PROVIDER_PARTIES": "Seller,SellerAgent,Company",
+            "CANTON_PROVIDER_PARTIES": "Seller,SellerAgent,Company,Outsider",
             "CANTON_USER_PARTIES": "Buyer,BuyerAgent",
             "CANTON_PACKAGE_ID": package_id,
         }

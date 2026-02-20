@@ -1,6 +1,7 @@
 module AgenticShadowCap.MvpScript where
 
 import Daml.Script
+import DA.Time (addRelTime, hours)
 
 import AgenticShadowCap.Market
 
@@ -11,6 +12,7 @@ mvpBootstrap = script do
   buyer <- allocatePartyByHint (PartyIdHint "Buyer")
   buyerAgent <- allocatePartyByHint (PartyIdHint "BuyerAgent")
   issuer <- allocatePartyByHint (PartyIdHint "Company")
+  _ <- allocatePartyByHint (PartyIdHint "Outsider")
 
   -- Issuer mints asset and cash holdings for the demo
   sellerAssetCid <- submit issuer do
@@ -57,6 +59,7 @@ mvpBootstrap = script do
         marketContext = "volatility=0.34 news=neutral"
 
   -- Discovery phase: agents post blind signals (no price/volume)
+  sellSignalAt <- getTime
   sellInterestCid <- submit sellerAgent do
     createCmd DiscoveryInterest
       with
@@ -67,7 +70,10 @@ mvpBootstrap = script do
         instrument = "COMPANY-SERIES-A"
         side = Sell
         strategyTag = "PASSIVE_LIQUIDITY"
+        createdAt = sellSignalAt
+        expiresAt = addRelTime sellSignalAt (hours 1)
 
+  buySignalAt <- getTime
   buyInterestCid <- submit buyerAgent do
     createCmd DiscoveryInterest
       with
@@ -78,6 +84,8 @@ mvpBootstrap = script do
         instrument = "COMPANY-SERIES-A"
         side = Buy
         strategyTag = "ROFR_ELIGIBLE"
+        createdAt = buySignalAt
+        expiresAt = addRelTime buySignalAt (hours 1)
 
   -- Issuer matches opposite interests -> private negotiation channel
   negotiationCid <- submit issuer do
@@ -94,6 +102,31 @@ mvpBootstrap = script do
   -- Seller agent accepts
   negotiationCid <- submit sellerAgent do
     exerciseCmd negotiationCid AcceptBySeller
+
+  -- Commit-reveal: both parties commit hash-only terms, then reveal before approval
+  let qtyText = "1200.0"
+  let unitPriceText = "101.5"
+  let sellerSalt = "seller-commit-salt"
+  let buyerSalt = "buyer-commit-salt"
+  let sellerHash = commitmentHashFromTerms qtyText unitPriceText sellerSalt
+  let buyerHash = commitmentHashFromTerms qtyText unitPriceText buyerSalt
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid CommitTerms with side = Sell, commitmentHash = sellerHash
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid CommitTerms with side = Buy, commitmentHash = buyerHash
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid RevealTerms with
+      side = Sell
+      qtyText
+      unitPriceText
+      salt = sellerSalt
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid RevealTerms with
+      side = Buy
+      qtyText
+      unitPriceText
+      salt = buyerSalt
 
   -- Issuer approves (ROFR/compliance gate)
   negotiationCid <- submit issuer do

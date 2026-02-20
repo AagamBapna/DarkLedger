@@ -51,7 +51,7 @@ class Config:
 
     provider_parties: set[str] = field(
         default_factory=lambda: _csv_set(
-            os.getenv("CANTON_PROVIDER_PARTIES", "Seller,SellerAgent,Company")
+            os.getenv("CANTON_PROVIDER_PARTIES", "Seller,SellerAgent,Company,Outsider")
         )
     )
     user_parties: set[str] = field(

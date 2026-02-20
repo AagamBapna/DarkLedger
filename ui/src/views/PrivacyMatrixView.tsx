@@ -28,6 +28,29 @@ interface PartySnapshot {
   message: string;
 }
 
+type TemplateKey =
+  | "tradeIntents"
+  | "discovery"
+  | "negotiations"
+  | "settlements"
+  | "audits"
+  | "assets"
+  | "cash";
+
+const TEMPLATE_COLUMNS: Array<{ key: TemplateKey; label: string }> = [
+  { key: "tradeIntents", label: "TradeIntent" },
+  { key: "discovery", label: "Discovery" },
+  { key: "negotiations", label: "Negotiation" },
+  { key: "settlements", label: "Settlement" },
+  { key: "audits", label: "Audit" },
+  { key: "assets", label: "Assets" },
+  { key: "cash", label: "Cash" },
+];
+
+function aliasOf(party: string): string {
+  return party.includes("::") ? party.split("::")[0] : party;
+}
+
 function reasonText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
@@ -36,22 +59,47 @@ function isListCap(reason: unknown): boolean {
   return reasonText(reason).includes("JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED");
 }
 
-async function loadSnapshot(party: string): Promise<PartySnapshot> {
-  if (party === "Public") {
-    return {
-      party,
-      tradeIntents: 0,
-      discovery: 0,
-      negotiations: 0,
-      settlements: 0,
-      audits: 0,
-      assets: 0,
-      cash: 0,
-      ok: true,
-      message: "Unauthorized perspective (expected zero visibility)",
-    };
+function expectedVisibility(template: TemplateKey, party: string): boolean {
+  const alias = aliasOf(party);
+  if (alias === "Outsider") return false;
+
+  if (template === "tradeIntents") {
+    return alias === "Seller" || alias === "SellerAgent" || alias === "Company";
   }
 
+  if (template === "discovery") {
+    return alias === "Seller"
+      || alias === "SellerAgent"
+      || alias === "Buyer"
+      || alias === "BuyerAgent"
+      || alias === "Company";
+  }
+
+  if (template === "negotiations" || template === "settlements" || template === "audits") {
+    return true;
+  }
+
+  if (template === "assets" || template === "cash") {
+    return true;
+  }
+
+  return false;
+}
+
+function heatCellClass(count: number, expected: boolean): string {
+  if (!expected && count > 0) {
+    return "bg-signal-coral/40 text-signal-coral border border-signal-coral/50";
+  }
+  if (!expected) {
+    return "bg-signal-coral/15 text-signal-coral border border-signal-coral/30";
+  }
+  if (count > 0) {
+    return "bg-signal-mint/25 text-signal-mint border border-signal-mint/35";
+  }
+  return "bg-signal-mint/10 text-signal-slate border border-signal-mint/25";
+}
+
+async function loadSnapshot(party: string): Promise<PartySnapshot> {
   const results = await Promise.allSettled([
     queryTradeIntents(party),
     queryDiscoveryInterests(party),
@@ -73,9 +121,17 @@ async function loadSnapshot(party: string): Promise<PartySnapshot> {
 
   const message =
     failures.length === 0
-      ? (results[1]?.status === "rejected" && isListCap((results[1] as PromiseRejectedResult).reason)
-        ? "Discovery list capped by node limit (>=200)"
-        : "OK")
+      ? (() => {
+          if (results[1]?.status === "rejected" && isListCap((results[1] as PromiseRejectedResult).reason)) {
+            return "Discovery list capped by node limit (>=200)";
+          }
+          const alias = party.includes("::") ? party.split("::")[0] : party;
+          const totalVisible = counts.reduce((sum, value) => sum + value, 0);
+          if (alias === "Outsider") {
+            return totalVisible === 0 ? "Outsider visibility = zero (live proof)" : "Outsider can see data (unexpected)";
+          }
+          return "OK";
+        })()
       : failures
           .map(({ result }) => (result as PromiseRejectedResult).reason)
           .map((reason) => reasonText(reason))
@@ -101,8 +157,7 @@ export function PrivacyMatrixView({ availableParties, activeParty, refreshToken 
   const [updatedAt, setUpdatedAt] = useState<string>("");
 
   const parties = useMemo(() => {
-    const deduped = Array.from(new Set(availableParties.filter((entry) => entry !== "Public")));
-    return [...deduped, "Public"];
+    return Array.from(new Set(availableParties));
   }, [availableParties]);
 
   useEffect(() => {
@@ -130,51 +185,52 @@ export function PrivacyMatrixView({ availableParties, activeParty, refreshToken 
 
   return (
     <section className="space-y-4">
-      <div className="rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
-        <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Privacy Matrix</p>
-        <h3 className="mt-2 text-xl font-semibold text-shell-950">Party-Scoped Contract Visibility Proof</h3>
+      <div className="rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
+        <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Privacy Heatmap</p>
+        <h3 className="mt-2 text-xl font-semibold text-shell-950">Party x Template Visibility Matrix</h3>
         <p className="mt-1 text-sm text-signal-slate">
-          This matrix is queried live from Canton. Each row is what that party can currently see.
+          Live Canton snapshot. Green cells are expected/private scope visibility. Red cells indicate hidden scope or potential leakage.
         </p>
-        <p className="mt-2 text-xs text-signal-slate">
-          Snapshot: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : "Loading..."}
-        </p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-signal-slate">
+          <span className="rounded-full bg-signal-mint/20 px-2 py-1 text-signal-mint">Expected visibility</span>
+          <span className="rounded-full bg-signal-coral/20 px-2 py-1 text-signal-coral">Hidden / outsider scope</span>
+          <span className="rounded-full bg-shell-900/5 px-2 py-1">Snapshot: {updatedAt ? new Date(updatedAt).toLocaleTimeString() : "loading"}</span>
+        </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-shell-700 bg-white/70 backdrop-blur-xl p-4">
+      <div className="overflow-x-auto rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
         {loading ? <p className="text-sm text-signal-slate">Refreshing party visibility snapshot...</p> : null}
-        <table className="w-full min-w-[980px] text-sm">
+        <table className="w-full min-w-[980px] border-separate border-spacing-y-1 text-sm">
           <thead>
-            <tr className="border-b border-shell-700 text-left text-xs uppercase tracking-[0.15em] text-signal-slate">
+            <tr className="text-left text-xs uppercase tracking-[0.14em] text-signal-slate">
               <th className="py-2">Party</th>
-              <th className="py-2">TradeIntent</th>
-              <th className="py-2">Discovery</th>
-              <th className="py-2">Negotiation</th>
-              <th className="py-2">Settlement</th>
-              <th className="py-2">Audit</th>
-              <th className="py-2">Assets</th>
-              <th className="py-2">Cash</th>
-              <th className="py-2">Status</th>
+              {TEMPLATE_COLUMNS.map((column) => (
+                <th key={column.key} className="py-2 text-center">{column.label}</th>
+              ))}
+              <th className="py-2 text-center">Status</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr
-                key={row.party}
-                className={`border-b border-shell-800 ${
-                  row.party === activeParty ? "bg-signal-mint/10" : "bg-transparent"
-                }`}
-              >
-                <td className="py-3 font-medium text-shell-950">{row.party}</td>
-                <td className="py-3 text-signal-slate">{row.tradeIntents}</td>
-                <td className="py-3 text-signal-slate">{row.discovery}</td>
-                <td className="py-3 text-signal-slate">{row.negotiations}</td>
-                <td className="py-3 text-signal-slate">{row.settlements}</td>
-                <td className="py-3 text-signal-slate">{row.audits}</td>
-                <td className="py-3 text-signal-slate">{row.assets}</td>
-                <td className="py-3 text-signal-slate">{row.cash}</td>
-                <td className={row.ok ? "py-3 text-signal-mint" : "py-3 text-signal-coral"}>
-                  {row.ok ? "ok" : "degraded"}
+              <tr key={row.party} className={row.party === activeParty ? "bg-signal-mint/8" : "bg-transparent"}>
+                <td className="rounded-l-lg border border-shell-700 bg-white/85 px-3 py-3 font-semibold text-shell-950">
+                  {aliasOf(row.party)}
+                </td>
+                {TEMPLATE_COLUMNS.map((column) => {
+                  const count = row[column.key];
+                  const expected = expectedVisibility(column.key, row.party);
+                  return (
+                    <td key={`${row.party}-${column.key}`} className="px-1 py-1 text-center">
+                      <div className={`rounded-md px-2 py-2 text-xs font-semibold ${heatCellClass(count, expected)}`}>
+                        {count}
+                      </div>
+                    </td>
+                  );
+                })}
+                <td className="rounded-r-lg border border-shell-700 bg-white/85 px-3 py-3 text-center">
+                  <span className={row.ok ? "text-signal-mint" : "text-signal-coral"}>
+                    {row.ok ? "ok" : "degraded"}
+                  </span>
                 </td>
               </tr>
             ))}
@@ -182,10 +238,9 @@ export function PrivacyMatrixView({ availableParties, activeParty, refreshToken 
         </table>
       </div>
 
-      <div className="rounded-xl border border-shell-700 bg-white/60 backdrop-blur-xl p-4 text-xs text-signal-slate">
+      <div className="rounded-xl border border-shell-700 bg-white/60 p-4 text-xs text-signal-slate backdrop-blur-xl">
         <p>
-          Judge cue: switch party in the header, refresh this matrix, and point out that sensitive contracts never appear
-          in unauthorized rows.
+          Judge cue: trigger an action, then re-open this heatmap to show live cell updates. Outsider row should remain red/zero across all templates.
         </p>
       </div>
     </section>

@@ -1,11 +1,13 @@
 .PHONY: build dpm-build dpm-test up down parties upload seed controls-reset agents agents-stop ui ui-stop sandbox demo demo-docker demo-stop clean status test test-daml test-e2e test-lifecycle devnet devnet-demo devnet-down canton-network-bootstrap canton-network-demo demo-web-venv demo-web-backend dpm-install
 
-DAML_DIR   := daml
-DEPLOY_DIR := deploy
-AGENT_DIR  := agent
-UI_DIR     := ui
-DAR_FILE   := $(DAML_DIR)/.daml/dist/agentic-shadow-cap-0.1.0.dar
-PYTHON     := python3
+DAML_DIR      := daml
+DAML_TEST_DIR := daml-test
+DEPLOY_DIR    := deploy
+AGENT_DIR     := agent
+UI_DIR        := ui
+DAR_FILE      := $(DAML_DIR)/.daml/dist/agentic-shadow-cap-0.1.0.dar
+TEST_DAR_FILE := $(DAML_TEST_DIR)/.daml/dist/agentic-shadow-cap-test-0.1.0.dar
+PYTHON        := python3
 
 # Network mode: local | devnet | testnet | mainnet
 CANTON_NETWORK_MODE ?= local
@@ -189,6 +191,10 @@ ui-stop:
 sandbox:
 	@echo "==> Starting local sandbox demo..."
 	$(MAKE) build
+	@echo "==> Building script/test package..."
+	@$(ensure_daml_cmd); \
+		echo "==> Using $$DAML_CMD"; \
+		cd $(DAML_TEST_DIR) && $$DAML_CMD build
 	@echo "==> Starting Daml sandbox..."
 	@$(ensure_daml_cmd); \
 		echo "==> Using $$DAML_CMD"; \
@@ -198,13 +204,13 @@ sandbox:
 	@$(ensure_daml_cmd); \
 		echo "==> Using $$DAML_CMD"; \
 		if [ "$$DAML_CMD" = "dpm" ]; then \
-			cd $(DAML_DIR) && $$DAML_CMD script --dar .daml/dist/agentic-shadow-cap-0.1.0.dar \
+			cd $(DAML_TEST_DIR) && $$DAML_CMD script --dar .daml/dist/agentic-shadow-cap-test-0.1.0.dar \
 				--script-name AgenticShadowCap.MvpScript:mvpBootstrap \
-				--ledger-host localhost --port 6865 --wall-clock-time; \
+				--ledger-host localhost --port 6865 --upload-dar true --wall-clock-time; \
 		else \
-			cd $(DAML_DIR) && $$DAML_CMD script --dar .daml/dist/agentic-shadow-cap-0.1.0.dar \
+			cd $(DAML_TEST_DIR) && $$DAML_CMD script --dar .daml/dist/agentic-shadow-cap-test-0.1.0.dar \
 				--script-name AgenticShadowCap.MvpScript:mvpBootstrap \
-				--ledger-host localhost --ledger-port 6865 --wall-clock-time; \
+				--ledger-host localhost --ledger-port 6865 --upload-dar yes --wall-clock-time; \
 		fi
 	@echo "==> Sandbox demo complete. Full lifecycle executed."
 
@@ -251,16 +257,18 @@ demo-stop:
 # ─── Testing ────────────────────────────────────────────────────────────────
 test-daml:
 	@echo "==> Running Daml tests..."
+	@$(MAKE) build
 	@$(ensure_daml_cmd); \
 		echo "==> Using $$DAML_CMD"; \
-		cd $(DAML_DIR) && $$DAML_CMD test
+		cd $(DAML_TEST_DIR) && $$DAML_CMD test
 	@echo "==> All Daml tests passed."
 
 dpm-test:
 	@echo "==> Running Daml tests with dpm..."
+	@$(MAKE) dpm-build
 	@$(ensure_dpm_cmd); \
 		echo "==> Using $$DPM_CMD"; \
-		cd $(DAML_DIR) && $$DPM_CMD test
+		cd $(DAML_TEST_DIR) && $$DPM_CMD test
 	@echo "==> All Daml tests passed."
 
 test-e2e:
@@ -341,6 +349,7 @@ status:
 clean:
 	@echo "==> Cleaning build artifacts..."
 	rm -rf $(DAML_DIR)/.daml
+	rm -rf $(DAML_TEST_DIR)/.daml
 	rm -rf $(UI_DIR)/node_modules $(UI_DIR)/dist
 	rm -rf .venv __pycache__ $(AGENT_DIR)/__pycache__
 	@echo "==> Clean."

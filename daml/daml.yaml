@@ -11,6 +11,4 @@ parties:
 dependencies:
   - daml-prim
   - daml-stdlib
-  - daml-script
-init-script: AgenticShadowCap.MvpScript:mvpBootstrap
 start-navigator: false

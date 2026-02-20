@@ -22,6 +22,8 @@ export interface DiscoveryInterestPayload {
   instrument: string;
   side: string | { tag?: string };
   strategyTag: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface PrivateNegotiationPayload {
@@ -37,6 +39,10 @@ export interface PrivateNegotiationPayload {
   buyerAccepted: boolean;
   issuerApproved: boolean;
   expiresAt: string;
+  sellerCommitmentHash: string | null | { tag: "Some" | "None"; value?: string };
+  buyerCommitmentHash: string | null | { tag: "Some" | "None"; value?: string };
+  sellerTermsRevealed: boolean;
+  buyerTermsRevealed: boolean;
 }
 
 export interface TradeSettlementPayload {

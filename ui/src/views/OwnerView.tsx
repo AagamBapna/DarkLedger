@@ -24,6 +24,32 @@ interface OwnerViewProps {
   onOverrideMinPrice: (contractId: string, nextMinPrice: number) => Promise<void>;
 }
 
+function aliasOf(party: string): string {
+  return party.includes("::") ? party.split("::")[0] : party;
+}
+
+function pseudonymToken(value: string): string {
+  let acc = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    acc = (acc * 33 + value.charCodeAt(i)) >>> 0;
+  }
+  return acc.toString(16).toUpperCase().slice(-4).padStart(4, "0");
+}
+
+function maskedCounterparty(party: Party, negotiation: PrivateNegotiationPayload): string {
+  const alias = aliasOf(party);
+  if (alias === "Company") {
+    return `${aliasOf(negotiation.seller)} ↔ ${aliasOf(negotiation.buyer)}`;
+  }
+  if (alias === "Seller" || alias === "SellerAgent") {
+    return `Buyer-${pseudonymToken(negotiation.buyer)}`;
+  }
+  if (alias === "Buyer" || alias === "BuyerAgent") {
+    return `Seller-${pseudonymToken(negotiation.seller)}`;
+  }
+  return `Pair-${pseudonymToken(negotiation.instrument)}`;
+}
+
 export function OwnerView({
   party,
   tradeIntents,
@@ -187,9 +213,11 @@ export function OwnerView({
               {negotiations.map((n) => {
                 const qty = optionalToNumber(n.payload.proposedQty);
                 const price = optionalToNumber(n.payload.proposedUnitPrice);
+                const termsVisible = aliasOf(party) === "Company" || (n.payload.sellerTermsRevealed && n.payload.buyerTermsRevealed);
                 return (
                   <article key={n.contractId} className="rounded-lg border border-shell-700 bg-white/80 p-3">
                     <p className="font-semibold text-shell-950">{n.payload.instrument}</p>
+                    <p className="mt-1 text-xs text-signal-slate">Counterparty: {maskedCounterparty(party, n.payload)}</p>
                     <div className="mt-1 flex gap-3 text-xs text-signal-slate">
                       <span className={n.payload.sellerAccepted ? "text-signal-mint" : ""}>
                         Seller: {n.payload.sellerAccepted ? "Accepted" : "Pending"}
@@ -201,9 +229,15 @@ export function OwnerView({
                         Issuer: {n.payload.issuerApproved ? "Approved" : "Pending"}
                       </span>
                     </div>
-                    <p className="mt-1 text-sm text-signal-slate">
-                      Qty: {qty ?? "—"} | Price: {price ?? "—"}
-                    </p>
+                    {termsVisible ? (
+                      <p className="mt-1 text-sm text-signal-slate">
+                        Qty: {qty ?? "—"} | Price: {price ?? "—"}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-sm text-signal-slate">
+                        Terms hidden until both parties reveal commitment hashes.
+                      </p>
+                    )}
                   </article>
                 );
               })}

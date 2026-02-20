@@ -6,14 +6,30 @@ interface MarketViewProps {
   onOpenChannel: () => void;
 }
 
+function aliasOf(party: string): string {
+  return party.includes("::") ? party.split("::")[0] : party;
+}
+
+function pseudonymToken(value: string): string {
+  let acc = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    acc = (acc * 33 + value.charCodeAt(i)) >>> 0;
+  }
+  return acc.toString(16).toUpperCase().slice(-4).padStart(4, "0");
+}
+
 function pseudonymFor(party: Party, negotiation: PrivateNegotiationPayload): string {
-  if (party === "Seller" || party === "SellerAgent") {
-    return `Buyer-${negotiation.buyer.slice(0, 6)}`;
+  const alias = aliasOf(party);
+  if (alias === "Company") {
+    return `${aliasOf(negotiation.seller)} ↔ ${aliasOf(negotiation.buyer)}`;
   }
-  if (party === "Buyer" || party === "BuyerAgent") {
-    return `Seller-${negotiation.seller.slice(0, 6)}`;
+  if (alias === "Seller" || alias === "SellerAgent") {
+    return `Buyer-${pseudonymToken(negotiation.buyer)}`;
   }
-  return `Pair-${negotiation.instrument.slice(0, 6)}`;
+  if (alias === "Buyer" || alias === "BuyerAgent") {
+    return `Seller-${pseudonymToken(negotiation.seller)}`;
+  }
+  return `Pair-${pseudonymToken(negotiation.instrument)}`;
 }
 
 export function MarketView({ party, negotiations, onOpenChannel }: MarketViewProps) {

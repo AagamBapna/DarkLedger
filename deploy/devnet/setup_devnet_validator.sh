@@ -261,21 +261,25 @@ ok "Python runtime ready (.venv)"
 
 export CANTON_PROVIDER_URL="http://127.0.0.1:${APP_PROVIDER_JSON_API_PORT}"
 export CANTON_USER_URL="http://127.0.0.1:${APP_USER_JSON_API_PORT}"
-export CANTON_NETWORK_MODE="${CANTON_NETWORK_MODE:-local}"
-export CANTON_ALLOW_INSECURE_TOKEN="${CANTON_ALLOW_INSECURE_TOKEN:-true}"
+export CANTON_NETWORK_MODE="${CANTON_NETWORK_MODE:-devnet}"
+if [[ "$CANTON_NETWORK_MODE" =~ ^(local|devnet)$ ]]; then
+  export CANTON_ALLOW_INSECURE_TOKEN="${CANTON_ALLOW_INSECURE_TOKEN:-true}"
+else
+  export CANTON_ALLOW_INSECURE_TOKEN="${CANTON_ALLOW_INSECURE_TOKEN:-false}"
+fi
 export CANTON_INSECURE_TOKEN_MODE="${CANTON_INSECURE_TOKEN_MODE:-hs256-unsafe}"
 export CANTON_INSECURE_SECRET="${CANTON_INSECURE_SECRET:-unsafe}"
 export CANTON_INSECURE_AUDIENCE="${CANTON_INSECURE_AUDIENCE:-https://canton.network.global}"
 export CANTON_INSECURE_SUB="${CANTON_INSECURE_SUB:-ledger-api-user}"
 
 if [[ -z "${CANTON_PROVIDER_TOKEN:-}" && -z "${CANTON_USER_TOKEN:-}" && -z "${CANTON_JWT_TOKEN:-}" ]]; then
-  if [[ "$CANTON_ALLOW_INSECURE_TOKEN" == "true" ]]; then
+  if [[ "$CANTON_ALLOW_INSECURE_TOKEN" == "true" && "$CANTON_NETWORK_MODE" =~ ^(local|devnet)$ ]]; then
     SHARED_TOKEN="$(generate_unsafe_hs256_token)"
     export CANTON_PROVIDER_TOKEN="$SHARED_TOKEN"
     export CANTON_USER_TOKEN="$SHARED_TOKEN"
     ok "Generated unsafe HS256 token for localnet bootstrap"
   else
-    warn "No token found. Set CANTON_PROVIDER_TOKEN / CANTON_USER_TOKEN / CANTON_JWT_TOKEN."
+    fail_exit "No token found for mode=${CANTON_NETWORK_MODE}. Set CANTON_PROVIDER_TOKEN / CANTON_USER_TOKEN / CANTON_JWT_TOKEN."
   fi
 fi
 
