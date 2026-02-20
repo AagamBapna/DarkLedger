@@ -6,20 +6,20 @@ export default {
     extend: {
       colors: {
         shell: {
-          950: "#171b2d",
-          900: "#ffffff",
-          800: "#f3f5fb",
-          700: "#dfe4f1"
+          950: "#10100f",
+          900: "#fbfaf8",
+          800: "#efede8",
+          700: "#ccc8bf"
         },
         signal: {
-          mint: "#32c5b4",
-          amber: "#e6ba58",
-          coral: "#e38772",
-          slate: "#6f7790"
+          mint: "#3f8d66",
+          amber: "#996f34",
+          coral: "#9f4c44",
+          slate: "#5c5a55"
         }
       },
       boxShadow: {
-        pulse: "0 16px 48px rgba(37, 49, 98, 0.18)"
+        pulse: "0 20px 45px rgba(16, 16, 15, 0.18)"
       }
     }
   },

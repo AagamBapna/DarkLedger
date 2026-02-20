@@ -185,7 +185,7 @@ export function PrivacyMatrixView({ availableParties, activeParty, refreshToken 
 
   return (
     <section className="space-y-4">
-      <div className="rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
+      <div className="data-card">
         <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Privacy Heatmap</p>
         <h3 className="mt-2 text-xl font-semibold text-shell-950">Party x Template Visibility Matrix</h3>
         <p className="mt-1 text-sm text-signal-slate">
@@ -198,7 +198,7 @@ export function PrivacyMatrixView({ availableParties, activeParty, refreshToken 
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
+      <div className="panel-shell overflow-x-auto">
         {loading ? <p className="text-sm text-signal-slate">Refreshing party visibility snapshot...</p> : null}
         <table className="w-full min-w-[980px] border-separate border-spacing-y-1 text-sm">
           <thead>
@@ -238,7 +238,7 @@ export function PrivacyMatrixView({ availableParties, activeParty, refreshToken 
         </table>
       </div>
 
-      <div className="rounded-xl border border-shell-700 bg-white/60 p-4 text-xs text-signal-slate backdrop-blur-xl">
+      <div className="data-card text-xs text-signal-slate">
         <p>
           Judge cue: trigger an action, then re-open this heatmap to show live cell updates. Outsider row should remain red/zero across all templates.
         </p>

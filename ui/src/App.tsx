@@ -27,6 +27,7 @@ import type {
   TradeIntentPayload,
   TradeSettlementPayload,
 } from "./types/contracts";
+import { FlowView } from "./views/FlowView";
 import { PrivacyMatrixView } from "./views/PrivacyMatrixView";
 
 type ShockTemplate = "tradeIntent" | "privateNegotiation" | "tradeSettlement";
@@ -35,6 +36,9 @@ type NegotiationChoice =
   | "SubmitBuyerTerms"
   | "CommitTerms"
   | "RevealTerms"
+  | "RejectBySeller"
+  | "RejectByBuyer"
+  | "ExpireNegotiation"
   | "AcceptBySeller"
   | "AcceptByBuyer"
   | "ApproveMatch"
@@ -83,6 +87,14 @@ interface LeakPreview {
   minPrice: number;
   sellerAlias: string;
   buyerAlias: string;
+}
+
+interface EntropyStreak {
+  top: number;
+  left: number;
+  width: number;
+  delay: string;
+  duration: string;
 }
 
 const POLL_INTERVAL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS ?? "3000");
@@ -148,6 +160,17 @@ function agentRoleForParty(party: string): "seller" | "buyer" | null {
   if (alias === "Seller" || alias === "SellerAgent") return "seller";
   if (alias === "Buyer" || alias === "BuyerAgent") return "buyer";
   return null;
+}
+
+function isAlias(party: string, expected: string): boolean {
+  return aliasOf(party) === expected;
+}
+
+function normalizeActionError(message: string): string {
+  if (message.includes("DAML_AUTHORIZATION_ERROR")) {
+    return "Authorization failed for the selected actor. Use Seller for TradeIntent, SellerAgent/BuyerAgent for negotiation, and Company for settlement/compliance actions.";
+  }
+  return message.length > 240 ? `${message.slice(0, 240)}...` : message;
 }
 
 function errorMessageFrom(reason: unknown): string {
@@ -325,6 +348,12 @@ export default function App() {
   const [sellerAssetCid, setSellerAssetCid] = useState("");
   const [buyerCashCid, setBuyerCashCid] = useState("");
 
+  const [advancedActor, setAdvancedActor] = useState<string>(companyParty);
+  const [advancedTemplateId, setAdvancedTemplateId] = useState<string>(TEMPLATE_IDS.privateNegotiation);
+  const [advancedContractId, setAdvancedContractId] = useState("");
+  const [advancedChoice, setAdvancedChoice] = useState("ExpireNegotiation");
+  const [advancedArgumentJson, setAdvancedArgumentJson] = useState("{}");
+
   const priorIntentIds = useRef<Set<string>>(new Set());
   const priorNegotiationIds = useRef<Set<string>>(new Set());
   const priorSettlementIds = useRef<Set<string>>(new Set());
@@ -337,6 +366,7 @@ export default function App() {
     setDiscoverableByCsv(buyerAgentParty);
     setNegotiationActor(sellerAgentParty);
     setSettlementActor(companyParty);
+    setAdvancedActor(companyParty);
   }, [buyerAgentParty, companyParty, sellerAgentParty, sellerParty]);
 
   useEffect(() => {
@@ -727,6 +757,29 @@ export default function App() {
     [party, addLog, refreshLedgerData],
   );
 
+  const onArchiveTradeIntent = useCallback(
+    async (contractId: string) => {
+      try {
+        await exerciseChoice(sellerParty, TEMPLATE_IDS.tradeIntent, contractId, "ArchiveIntent", {});
+        addLog({
+          source: "ui-action",
+          decision: "TradeIntent archived",
+          metadata: `cid=${contractId}`,
+        });
+        await refreshLedgerData(party);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "ArchiveIntent failed";
+        addLog({
+          source: "ui-action",
+          decision: "TradeIntent archive failed",
+          metadata: `cid=${contractId} error=${message}`,
+        });
+        setError(normalizeActionError(message));
+      }
+    },
+    [addLog, party, refreshLedgerData, sellerParty],
+  );
+
   const onApproveMatch = useCallback(
     async (actor: string, contractId: string) => {
       await exerciseChoice(actor, TEMPLATE_IDS.privateNegotiation, contractId, "ApproveMatch", {});
@@ -801,7 +854,8 @@ export default function App() {
         await refreshOutsiderSnapshot();
         await refreshVisibilityShock();
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Action failed";
+        const rawMessage = err instanceof Error ? err.message : "Action failed";
+        const message = normalizeActionError(rawMessage);
         setActionError(message);
         addLog({
           source: "ui-action",
@@ -816,6 +870,10 @@ export default function App() {
   );
 
   const executeCreateTradeIntent = useCallback(async () => {
+    if (!isAlias(orderActor, "Seller")) {
+      setActionError("TradeIntent creation requires Actor=Seller.");
+      return;
+    }
     const qty = Number.parseFloat(quantity);
     const px = Number.parseFloat(minPrice);
     await runConsoleAction(`TradeIntent created by ${aliasOf(orderActor)}`, async () => {
@@ -831,6 +889,11 @@ export default function App() {
   }, [companyParty, instrument, minPrice, orderActor, quantity, runConsoleAction, sellerAgentParty, sellerParty]);
 
   const executeCreateDiscoveryInterest = useCallback(async () => {
+    const discoveryActorAlias = aliasOf(discoveryActor);
+    if (discoveryActorAlias !== "SellerAgent" && discoveryActorAlias !== "BuyerAgent") {
+      setActionError("DiscoveryInterest posting requires Actor=SellerAgent or BuyerAgent.");
+      return;
+    }
     const discoverableBy = discoverableByCsv
       .split(",")
       .map((entry) => entry.trim())
@@ -856,6 +919,24 @@ export default function App() {
   const executeNegotiationChoice = useCallback(async () => {
     if (!negotiationCid) {
       setActionError("Select a PrivateNegotiation contract ID first.");
+      return;
+    }
+
+    const expectedActor =
+      negotiationChoice === "SubmitSellerTerms"
+      || negotiationChoice === "AcceptBySeller"
+      || negotiationChoice === "RejectBySeller"
+        ? sellerAgentParty
+        : negotiationChoice === "SubmitBuyerTerms"
+          || negotiationChoice === "AcceptByBuyer"
+          || negotiationChoice === "RejectByBuyer"
+          ? buyerAgentParty
+          : negotiationChoice === "CommitTerms" || negotiationChoice === "RevealTerms"
+            ? (negotiationSide === "Sell" ? sellerAgentParty : buyerAgentParty)
+            : companyParty;
+
+    if (negotiationActor !== expectedActor) {
+      setActionError(`"${negotiationChoice}" requires Actor=${aliasOf(expectedActor)}.`);
       return;
     }
 
@@ -906,12 +987,20 @@ export default function App() {
     negotiationSalt,
     negotiationSide,
     onApproveMatch,
+    buyerAgentParty,
+    companyParty,
     runConsoleAction,
+    sellerAgentParty,
   ]);
 
   const executeSettlementChoice = useCallback(async () => {
     if (!settlementCid) {
       setActionError("Select a TradeSettlement contract ID first.");
+      return;
+    }
+
+    if (!isAlias(settlementActor, "Company")) {
+      setActionError("Settlement choices require Actor=Company.");
       return;
     }
 
@@ -935,6 +1024,43 @@ export default function App() {
       );
     });
   }, [buyerCashCid, runConsoleAction, sellerAssetCid, settlementActor, settlementChoice, settlementCid]);
+
+  const executeAdvancedChoice = useCallback(async () => {
+    if (!advancedContractId.trim()) {
+      setActionError("Enter a contract ID for advanced choice execution.");
+      return;
+    }
+
+    let argument: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(advancedArgumentJson || "{}");
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        setActionError("Advanced argument JSON must be an object.");
+        return;
+      }
+      argument = parsed as Record<string, unknown>;
+    } catch {
+      setActionError("Advanced argument JSON is invalid.");
+      return;
+    }
+
+    await runConsoleAction(`Advanced choice ${advancedChoice} by ${aliasOf(advancedActor)}`, async () => {
+      await exerciseChoice(
+        advancedActor,
+        advancedTemplateId,
+        advancedContractId.trim(),
+        advancedChoice.trim(),
+        argument,
+      );
+    });
+  }, [
+    advancedActor,
+    advancedArgumentJson,
+    advancedChoice,
+    advancedContractId,
+    advancedTemplateId,
+    runConsoleAction,
+  ]);
 
   const outsiderVisibilityTotal =
     outsiderSnapshot.tradeIntents
@@ -988,6 +1114,79 @@ export default function App() {
     || aliasOf(party) === "Buyer"
     || aliasOf(party) === "BuyerAgent";
 
+  const tradeIntentActorOptions = useMemo(() => {
+    const options = availableParties.filter((entry) => isAlias(entry, "Seller"));
+    return options.length > 0 ? options : [sellerParty];
+  }, [availableParties, sellerParty]);
+
+  const discoveryActorOptions = useMemo(() => {
+    const options = availableParties.filter((entry) => {
+      const alias = aliasOf(entry);
+      return alias === "SellerAgent" || alias === "BuyerAgent";
+    });
+    return options.length > 0 ? options : [sellerAgentParty, buyerAgentParty];
+  }, [availableParties, buyerAgentParty, sellerAgentParty]);
+
+  const discoveryOwnerOptions = useMemo(() => {
+    const options = availableParties.filter((entry) => {
+      const alias = aliasOf(entry);
+      return alias === "Seller" || alias === "Buyer";
+    });
+    return options.length > 0 ? options : [sellerParty, buyerParty];
+  }, [availableParties, buyerParty, sellerParty]);
+
+  const requiredNegotiationActor = useMemo(() => {
+    if (
+      negotiationChoice === "SubmitSellerTerms"
+      || negotiationChoice === "AcceptBySeller"
+      || negotiationChoice === "RejectBySeller"
+    ) return sellerAgentParty;
+    if (
+      negotiationChoice === "SubmitBuyerTerms"
+      || negotiationChoice === "AcceptByBuyer"
+      || negotiationChoice === "RejectByBuyer"
+    ) return buyerAgentParty;
+    if (negotiationChoice === "CommitTerms" || negotiationChoice === "RevealTerms") {
+      return negotiationSide === "Sell" ? sellerAgentParty : buyerAgentParty;
+    }
+    return companyParty;
+  }, [buyerAgentParty, companyParty, negotiationChoice, negotiationSide, sellerAgentParty]);
+
+  const settlementActorOptions = useMemo(() => {
+    const options = availableParties.filter((entry) => isAlias(entry, "Company"));
+    return options.length > 0 ? options : [companyParty];
+  }, [availableParties, companyParty]);
+
+  useEffect(() => {
+    if (!tradeIntentActorOptions.includes(orderActor)) {
+      setOrderActor(tradeIntentActorOptions[0]);
+    }
+  }, [orderActor, tradeIntentActorOptions]);
+
+  useEffect(() => {
+    if (!discoveryActorOptions.includes(discoveryActor)) {
+      setDiscoveryActor(discoveryActorOptions[0]);
+    }
+  }, [discoveryActor, discoveryActorOptions]);
+
+  useEffect(() => {
+    if (!discoveryOwnerOptions.includes(discoveryOwner)) {
+      setDiscoveryOwner(discoveryOwnerOptions[0]);
+    }
+  }, [discoveryOwner, discoveryOwnerOptions]);
+
+  useEffect(() => {
+    if (negotiationActor !== requiredNegotiationActor) {
+      setNegotiationActor(requiredNegotiationActor);
+    }
+  }, [negotiationActor, requiredNegotiationActor]);
+
+  useEffect(() => {
+    if (!settlementActorOptions.includes(settlementActor)) {
+      setSettlementActor(settlementActorOptions[0]);
+    }
+  }, [settlementActor, settlementActorOptions]);
+
   const partyVisibilityNarrative = useMemo(() => {
     const alias = aliasOf(party);
     switch (alias) {
@@ -1037,69 +1236,164 @@ export default function App() {
     + settlements.length
     + outsiderVisibilityTotal;
 
+  const refreshAllViews = useCallback(async () => {
+    await refreshLedgerData(party);
+    await refreshOutsiderSnapshot();
+    await refreshVisibilityShock();
+  }, [party, refreshLedgerData, refreshOutsiderSnapshot, refreshVisibilityShock]);
+
+  const entropyLines = useMemo(() => {
+    const seedText = [
+      party,
+      networkMode,
+      String(outsiderVisibilityTotal),
+      String(tradeIntents.length),
+      String(discoveryInterests.length),
+      String(negotiations.length),
+      String(settlements.length),
+      String(error ? 1 : 0),
+    ].join("|");
+
+    let state = 2166136261;
+    for (const char of seedText) {
+      state = Math.imul(state ^ char.charCodeAt(0), 16777619) >>> 0;
+    }
+
+    const nextHexChunk = () => {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return (state >>> 0).toString(16).toUpperCase().padStart(8, "0");
+    };
+
+    return Array.from({ length: 20 }, (_, index) => {
+      const chunks = Array.from({ length: 15 }, () => nextHexChunk()).join(" ");
+      return `${String(index).padStart(2, "0")} ${chunks}`;
+    });
+  }, [
+    tradeIntents,
+    discoveryInterests,
+    negotiations,
+    settlements,
+    party,
+    networkMode,
+    outsiderVisibilityTotal,
+    error,
+  ]);
+
+  const introStreaks = useMemo<EntropyStreak[]>(() => [
+    { top: 8, left: 30, width: 66, delay: "0s", duration: "4.2s" },
+    { top: 13, left: 42, width: 54, delay: "0.3s", duration: "3.6s" },
+    { top: 19, left: 20, width: 70, delay: "0.7s", duration: "4.7s" },
+    { top: 24, left: 48, width: 58, delay: "0.2s", duration: "3.8s" },
+    { top: 30, left: 25, width: 63, delay: "0.5s", duration: "4.5s" },
+    { top: 37, left: 58, width: 48, delay: "0.8s", duration: "3.9s" },
+    { top: 44, left: 31, width: 62, delay: "1.1s", duration: "4.8s" },
+    { top: 51, left: 16, width: 72, delay: "0.4s", duration: "4.4s" },
+    { top: 58, left: 52, width: 55, delay: "1.3s", duration: "4.1s" },
+    { top: 64, left: 28, width: 67, delay: "0.9s", duration: "4.6s" },
+    { top: 71, left: 60, width: 46, delay: "1.5s", duration: "3.7s" },
+    { top: 77, left: 23, width: 64, delay: "1.8s", duration: "4.3s" },
+    { top: 84, left: 45, width: 56, delay: "1.6s", duration: "4.0s" },
+    { top: 90, left: 26, width: 70, delay: "2.1s", duration: "4.9s" },
+  ], []);
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-[#eef1f8] via-[#f8f9fd] to-[#edf1fb] px-4 py-6 text-shell-950 md:px-8">
-      <div className="mx-auto max-w-[1500px] space-y-5">
-        <header className="rounded-3xl border border-shell-700 bg-white/80 p-6 shadow-[0_18px_60px_rgba(36,56,99,0.12)] backdrop-blur-xl">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.28em] text-signal-slate">Canton Privacy Control Tower</p>
-              <h1 className="mt-2 text-4xl font-bold leading-tight text-shell-950 md:text-5xl">
-                Confidential OTC Trading Feature Showcase
-              </h1>
-              <p className="mt-2 max-w-3xl text-base text-signal-slate">
-                Always-on demonstration of party-scoped visibility, commit-reveal integrity, issuer controls, and audit-grade settlement flow.
-              </p>
+    <main className="app-canvas px-4 py-6 text-shell-950 md:px-8">
+      <div className="mx-auto max-w-[1600px] space-y-5">
+        <header className="hero-shell">
+          <div className="hero-shell__copy">
+            <p className="text-xs uppercase tracking-[0.28em] text-signal-slate">Canton Privacy Control Tower</p>
+            <h1 className="hero-title">
+              The confidential market stack designed for private execution.
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm text-signal-slate md:text-base">
+              Live proof of scoped visibility, commit-reveal safety, settlement controls, and outsider denial across the same contract lifecycle.
+            </p>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              <button
+                className="hero-pill"
+                onClick={() => void refreshLedgerData(party)}
+                disabled={loading}
+              >
+                {loading ? "Refreshing..." : "Request Access"}
+              </button>
+              <button
+                className="hero-pill hero-pill--ghost"
+                onClick={() => void runRedTeamProbe()}
+                disabled={spyRunning}
+              >
+                {spyRunning ? "Probing..." : "Launch Probe"}
+              </button>
             </div>
-            <div className="grid gap-2 rounded-2xl border border-shell-700 bg-white p-4 md:min-w-[320px]">
-              <p className="text-xs uppercase tracking-[0.16em] text-signal-slate">Party & Network</p>
-              <p className="text-2xl font-semibold text-shell-950">{aliasOf(party)}</p>
-              <p className="text-xs text-signal-slate">Network mode: {networkMode}</p>
-              <p className="text-sm text-signal-slate">Endpoint: {participantLabelFor(party, networkMode)}</p>
-              <p className="text-xs">
-                Connectivity: <span className={error ? "text-signal-coral" : "text-signal-mint"}>{error ? "degraded" : "connected"}</span>
-              </p>
-              <p className="text-xs">
-                Market API: <span className={marketApiOnline ? "text-signal-mint" : "text-signal-coral"}>{marketApiOnline ? "online" : "offline"}</span>
-              </p>
+
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              <article className="data-card md:min-w-[320px]">
+                <p className="text-xs uppercase tracking-[0.16em] text-signal-slate">Party & Network</p>
+                <p className="mt-1 text-2xl font-semibold text-shell-950">{aliasOf(party)}</p>
+                <p className="text-xs text-signal-slate">Network mode: {networkMode}</p>
+                <p className="text-sm text-signal-slate">Endpoint: {participantLabelFor(party, networkMode)}</p>
+                <p className="text-xs">
+                  Connectivity: <span className={error ? "text-signal-coral" : "text-signal-mint"}>{error ? "degraded" : "connected"}</span>
+                </p>
+                <p className="text-xs">
+                  Market API: <span className={marketApiOnline ? "text-signal-mint" : "text-signal-coral"}>{marketApiOnline ? "online" : "offline"}</span>
+                </p>
+              </article>
+              <article className="data-card">
+                <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">What This Party Can See</p>
+                <p className="mt-2 text-sm text-shell-950">{partyVisibilityNarrative.canSee}</p>
+                <p className="mt-3 text-xs uppercase tracking-[0.14em] text-signal-slate">What This Party Cannot See</p>
+                <p className="mt-1 text-sm text-shell-950">{partyVisibilityNarrative.cannotSee}</p>
+              </article>
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              {availableParties.map((entry) => {
+                const active = party === entry;
+                return (
+                  <button
+                    key={entry}
+                    className={`hero-chip ${active ? "hero-chip--active" : ""}`}
+                    onClick={() => setParty(entry)}
+                  >
+                    {aliasOf(entry)}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
-            {availableParties.map((entry) => {
-              const active = party === entry;
-              return (
-                <button
-                  key={entry}
-                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                    active
-                      ? "border-shell-950 bg-shell-950 text-white shadow-pulse"
-                      : "border-shell-700 bg-white text-shell-950 hover:border-shell-950"
-                  }`}
-                  onClick={() => setParty(entry)}
-                >
-                  {aliasOf(entry)}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-5 grid gap-3 md:grid-cols-2">
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">What This Party Can See</p>
-              <p className="mt-2 text-sm text-shell-950">{partyVisibilityNarrative.canSee}</p>
-            </article>
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">What This Party Cannot See</p>
-              <p className="mt-2 text-sm text-shell-950">{partyVisibilityNarrative.cannotSee}</p>
-            </article>
+          <div className="hero-shell__entropy" aria-hidden="true">
+            <div className="entropy-scanline" />
+            <div className="entropy-streaks">
+              {introStreaks.map((streak, index) => (
+                <span
+                  key={`${streak.top}-${streak.left}-${index}`}
+                  className="entropy-streak"
+                  style={{
+                    top: `${streak.top}%`,
+                    left: `${streak.left}%`,
+                    width: `${streak.width}%`,
+                    animationDelay: streak.delay,
+                    animationDuration: streak.duration,
+                  }}
+                />
+              ))}
+            </div>
+            <div className="entropy-track">
+              {[...entropyLines, ...entropyLines].map((line, index) => (
+                <p key={`${line}-${index}`} className="entropy-line">{line}</p>
+              ))}
+            </div>
           </div>
         </header>
 
-        <section className="rounded-3xl border border-shell-700 bg-white/75 p-5 backdrop-blur-xl">
+        <section className="panel-shell">
           <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Privacy Guarantees</p>
           <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
+            <article className="data-card">
               <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Outsider Visibility</p>
               <p className={`mt-2 text-3xl font-bold ${outsiderVisibilityTotal === 0 ? "text-signal-mint" : "text-signal-coral"}`}>
                 {outsiderVisibilityTotal}
@@ -1107,7 +1401,7 @@ export default function App() {
               <p className="text-sm text-signal-slate">{outsiderVisibilityTotal === 0 ? "PASS: zero visible records" : "FAIL: unexpected visibility"}</p>
             </article>
 
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
+            <article className="data-card">
               <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Replay Attack Protection</p>
               <p className={`mt-2 text-3xl font-bold ${replayAttackBlocked ? "text-signal-mint" : "text-signal-coral"}`}>
                 {replayAttackBlocked ? "BLOCKED" : "RISK"}
@@ -1115,7 +1409,7 @@ export default function App() {
               <p className="text-sm text-signal-slate">Driven by commit-reveal and single-use choices.</p>
             </article>
 
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
+            <article className="data-card">
               <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Discovery TTL Cleanup</p>
               <p className={`mt-2 text-3xl font-bold ${expiredDiscoveryCount === 0 ? "text-signal-mint" : "text-signal-amber"}`}>
                 {expiredDiscoveryCount === 0 ? "PASS" : "ACTIVE"}
@@ -1123,7 +1417,7 @@ export default function App() {
               <p className="text-sm text-signal-slate">Active: {activeDiscoveryCount} | Expired: {expiredDiscoveryCount}</p>
             </article>
 
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
+            <article className="data-card">
               <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Commit-Reveal Integrity</p>
               <p className={`mt-2 text-3xl font-bold uppercase ${
                 commitRevealStatus === "revealed"
@@ -1139,219 +1433,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-shell-700 bg-white/80 p-5 backdrop-blur-xl">
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Feature Showcase Grid</p>
-              <h2 className="mt-1 text-2xl font-semibold text-shell-950">All Major Capabilities, Live At Once</h2>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-signal-slate">
-              <button
-                className="rounded-md border border-shell-700 bg-white px-3 py-1.5 font-semibold text-shell-950"
-                onClick={() => void refreshLedgerData(party)}
-                disabled={loading}
-              >
-                {loading ? "Refreshing..." : "Refresh Ledger"}
-              </button>
-              <button
-                className="rounded-md bg-signal-coral px-3 py-1.5 font-semibold text-shell-950 disabled:opacity-50"
-                onClick={() => void runRedTeamProbe()}
-                disabled={spyRunning}
-              >
-                {spyRunning ? "Probing..." : "Run Outsider Probe"}
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-4 xl:grid-cols-3">
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Trade Intents</p>
-              <p className="mt-1 text-2xl font-semibold text-shell-950">{tradeIntents.length}</p>
-              <p className="text-xs text-signal-slate">Total qty: {tradeIntents.reduce((sum, row) => sum + Number(row.payload.quantity), 0).toLocaleString()}</p>
-              <div className="mt-3 space-y-2">
-                {tradeIntents.slice(0, 3).map((intent) => {
-                  const currentMin = Number(intent.payload.minPrice);
-                  const draft = draftOverrides[intent.contractId] ?? currentMin.toFixed(2);
-                  return (
-                    <div key={intent.contractId} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                      <p className="text-sm font-semibold text-shell-950">{intent.payload.instrument}</p>
-                      <p className="text-xs text-signal-slate">
-                        Qty {Number(intent.payload.quantity).toLocaleString()} | Min ${currentMin.toFixed(2)} | CID {shortId(intent.contractId)}
-                      </p>
-                      <details className="mt-1">
-                        <summary className="cursor-pointer text-xs text-signal-slate">Expand actions</summary>
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            className="w-28 rounded-md border border-shell-700 bg-white px-2 py-1 text-xs text-shell-950"
-                            value={draft}
-                            onChange={(event) =>
-                              setDraftOverrides((prev) => ({ ...prev, [intent.contractId]: event.target.value }))
-                            }
-                          />
-                          <button
-                            className="rounded-md bg-signal-mint px-2 py-1 text-xs font-semibold text-shell-950 disabled:opacity-50"
-                            disabled={!canOverridePrice}
-                            onClick={() => void onOverrideMinPrice(intent.contractId, Number.parseFloat(draft))}
-                          >
-                            Update Price
-                          </button>
-                        </div>
-                      </details>
-                    </div>
-                  );
-                })}
-                {tradeIntents.length === 0 ? <p className="text-xs text-signal-slate">No visible TradeIntent contracts.</p> : null}
-              </div>
-              <label className="mt-3 flex items-center gap-2 text-xs text-signal-slate">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-signal-mint"
-                  checked={autoReprice}
-                  disabled={!canToggleAutoReprice}
-                  onChange={(event) => void onAutoRepriceToggle(event.target.checked)}
-                />
-                Agent auto-reprice
-              </label>
-            </article>
-
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Discovery (TTL + Matching)</p>
-              <p className="mt-1 text-2xl font-semibold text-shell-950">{discoveryInterests.length}</p>
-              <p className="text-xs text-signal-slate">Active {activeDiscoveryCount} | Expired {expiredDiscoveryCount}</p>
-              <div className="mt-3 space-y-2">
-                {discoveryInterests.slice(0, 3).map((item) => {
-                  const expiresAt = new Date(item.payload.expiresAt).getTime();
-                  const expired = Number.isFinite(expiresAt) && expiresAt <= Date.now();
-                  return (
-                    <div key={item.contractId} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                      <p className="text-sm font-semibold text-shell-950">{item.payload.instrument}</p>
-                      <p className="text-xs text-signal-slate">
-                        {sideTag(item.payload.side)} | by {aliasOf(item.payload.postingAgent)} | CID {shortId(item.contractId)}
-                      </p>
-                      <p className={`text-xs ${expired ? "text-signal-coral" : "text-signal-mint"}`}>
-                        {expired ? "Expired" : "TTL active"}
-                      </p>
-                    </div>
-                  );
-                })}
-                {discoveryInterests.length === 0 ? <p className="text-xs text-signal-slate">No visible DiscoveryInterest contracts.</p> : null}
-              </div>
-            </article>
-
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Negotiation + Commit-Reveal</p>
-              <p className="mt-1 text-2xl font-semibold text-shell-950">{negotiations.length}</p>
-              <p className="text-xs text-signal-slate">
-                committed {negotiations.filter((n) => optionalText(n.payload.sellerCommitmentHash) && optionalText(n.payload.buyerCommitmentHash)).length}
-                {" | "}
-                revealed {negotiations.filter((n) => n.payload.sellerTermsRevealed && n.payload.buyerTermsRevealed).length}
-              </p>
-              <div className="mt-3 space-y-2">
-                {negotiations.slice(0, 3).map((n) => (
-                  <div key={n.contractId} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                    <p className="text-sm font-semibold text-shell-950">{n.payload.instrument}</p>
-                    <p className="text-xs text-signal-slate">CID {shortId(n.contractId)} | issuer {n.payload.issuerApproved ? "approved" : "pending"}</p>
-                    <p className="text-xs text-signal-slate">
-                      seller {n.payload.sellerAccepted ? "ok" : "pending"} | buyer {n.payload.buyerAccepted ? "ok" : "pending"}
-                    </p>
-                    <p className="text-xs text-signal-slate">
-                      commit {optionalText(n.payload.sellerCommitmentHash) && optionalText(n.payload.buyerCommitmentHash) ? "ready" : "pending"}
-                      {" | "}
-                      reveal {n.payload.sellerTermsRevealed && n.payload.buyerTermsRevealed ? "done" : "pending"}
-                    </p>
-                  </div>
-                ))}
-                {negotiations.length === 0 ? <p className="text-xs text-signal-slate">No active private negotiations.</p> : null}
-              </div>
-            </article>
-
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Compliance + Settlement</p>
-              <p className="mt-1 text-2xl font-semibold text-shell-950">{pendingApprovals} pending approvals</p>
-              <p className="text-xs text-signal-slate">{pendingSettlements} pending settlements</p>
-              <div className="mt-3 space-y-2">
-                {negotiations
-                  .filter((item) => item.payload.sellerAccepted && item.payload.buyerAccepted && !item.payload.issuerApproved)
-                  .slice(0, 2)
-                  .map((item) => (
-                    <div key={item.contractId} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                      <p className="text-sm font-semibold text-shell-950">Approve {item.payload.instrument}</p>
-                      <p className="text-xs text-signal-slate">CID {shortId(item.contractId)}</p>
-                      <button
-                        className="mt-2 rounded-md bg-signal-amber px-2 py-1 text-xs font-semibold text-shell-950 disabled:opacity-50"
-                        disabled={actionBusy}
-                        onClick={() => void runConsoleAction(`ApproveMatch ${shortId(item.contractId)}`, () => onApproveMatch(companyParty, item.contractId))}
-                      >
-                        Approve Match
-                      </button>
-                    </div>
-                  ))}
-                {settlements.slice(0, 2).map((s) => (
-                  <div key={s.contractId} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                    <p className="text-sm font-semibold text-shell-950">{s.payload.instrument}</p>
-                    <p className="text-xs text-signal-slate">
-                      Settled: {s.payload.settled ? "yes" : "no"} | Qty {Number(s.payload.quantity).toLocaleString()} | Px {Number(s.payload.unitPrice).toFixed(2)}
-                    </p>
-                  </div>
-                ))}
-                {pendingApprovals === 0 && pendingSettlements === 0 ? (
-                  <p className="text-xs text-signal-slate">Compliance queue currently clear.</p>
-                ) : null}
-              </div>
-            </article>
-
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Audit Trail</p>
-              <p className="mt-1 text-2xl font-semibold text-shell-950">{auditRecords.length}</p>
-              <div className="mt-3 space-y-2">
-                {auditRecords.slice(0, 4).map((item) => (
-                  <details key={item.contractId} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                    <summary className="cursor-pointer text-sm font-semibold text-shell-950">{item.payload.instrument} ({shortId(item.contractId)})</summary>
-                    <p className="mt-1 text-xs text-signal-slate">
-                      Qty {Number(item.payload.quantity).toLocaleString()} | Price {Number(item.payload.unitPrice).toFixed(2)} | Settled {new Date(item.payload.settledAt).toLocaleString()}
-                    </p>
-                  </details>
-                ))}
-                {auditRecords.length === 0 ? <p className="text-xs text-signal-slate">No audit records visible.</p> : null}
-              </div>
-            </article>
-
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.14em] text-signal-slate">Agent Intelligence + Logs</p>
-              <p className="mt-1 text-2xl font-semibold text-shell-950">{decisionLogs.length} decision logs</p>
-              <div className="mt-3 space-y-2">
-                {decisionLogs.slice(0, 2).map((item) => (
-                  <details key={item.contractId} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                    <summary className="cursor-pointer text-sm font-semibold text-shell-950">
-                      {item.payload.decision.toUpperCase()} {item.payload.instrument} ({shortId(item.contractId)})
-                    </summary>
-                    <p className="mt-1 text-xs text-signal-slate">{item.payload.reasoning}</p>
-                  </details>
-                ))}
-                {logs.slice(0, 3).map((entry) => (
-                  <details key={entry.id} className="rounded-lg border border-shell-700 bg-shell-900/5 p-2">
-                    <summary className="cursor-pointer text-xs font-semibold text-shell-950">
-                      {entry.source} | {entry.decision}
-                    </summary>
-                    <p className="mt-1 text-xs text-signal-slate">{entry.metadata}</p>
-                  </details>
-                ))}
-                {decisionLogs.length === 0 && logs.length === 0 ? <p className="text-xs text-signal-slate">No logs yet.</p> : null}
-              </div>
-              <button
-                className="mt-3 rounded-md border border-shell-700 px-2 py-1 text-xs font-semibold text-signal-slate"
-                onClick={clearLogs}
-              >
-                Clear local logs
-              </button>
-            </article>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-shell-700 bg-white/80 p-5 backdrop-blur-xl">
+        <section className="panel-shell">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Same Contract, Two Perspectives</p>
@@ -1402,7 +1484,7 @@ export default function App() {
           </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <article className="rounded-xl border border-shell-700 bg-white p-4">
+            <article className="data-card">
               <p className="text-xs uppercase tracking-[0.12em] text-signal-slate">Authorized Party (Seller)</p>
               <p className={`mt-2 text-lg font-semibold ${visibilityShock?.sellerVisible ? "text-signal-mint" : "text-signal-coral"}`}>
                 {visibilityShock?.sellerVisible ? "VISIBLE" : "NOT VISIBLE"}
@@ -1417,7 +1499,7 @@ export default function App() {
               </button>
             </article>
 
-            <article className="rounded-xl border border-shell-700 bg-white p-4">
+            <article className="data-card">
               <p className="text-xs uppercase tracking-[0.12em] text-signal-slate">Outsider</p>
               <p className={`mt-2 text-lg font-semibold ${visibilityShock?.outsiderVisible ? "text-signal-coral" : "text-signal-mint"}`}>
                 {visibilityShock?.outsiderVisible ? "VISIBLE (UNEXPECTED)" : "NOT VISIBLE"}
@@ -1434,7 +1516,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-shell-700 bg-white/80 p-5 backdrop-blur-xl">
+        <section className="panel-shell">
           <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Cross-Party Visibility Matrix</p>
           <div className="mt-3">
             <PrivacyMatrixView
@@ -1445,334 +1527,26 @@ export default function App() {
           </div>
         </section>
 
-        <section className="rounded-3xl border border-shell-700 bg-white/80 p-5 backdrop-blur-xl">
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Live Action Console</p>
-              <h2 className="mt-1 text-2xl font-semibold text-shell-950">Manual Lifecycle Controls</h2>
-            </div>
-            <div className="text-sm text-signal-slate">
-              {actionStatus ? <span className="text-signal-mint">Last action: {actionStatus}</span> : "Ready"}
-              {actionError ? <span className="ml-2 text-signal-coral">{actionError}</span> : null}
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-4 xl:grid-cols-3">
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <h3 className="text-lg font-semibold text-shell-950">Trade Intent + Discovery</h3>
-              <div className="mt-3 grid gap-3">
-                <label className="text-xs text-signal-slate">
-                  Actor
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={orderActor}
-                    onChange={(event) => setOrderActor(event.target.value)}
-                  >
-                    {availableParties.filter((entry) => aliasOf(entry) !== "Outsider").map((entry) => (
-                      <option key={entry} value={entry}>{entry}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Instrument
-                  <input
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={instrument}
-                    onChange={(event) => setInstrument(event.target.value)}
-                  />
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs text-signal-slate">
-                    Quantity
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={quantity}
-                      onChange={(event) => setQuantity(event.target.value)}
-                    />
-                  </label>
-                  <label className="text-xs text-signal-slate">
-                    Min Price
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={minPrice}
-                      onChange={(event) => setMinPrice(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <button
-                  className="rounded-md bg-signal-mint px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
-                  disabled={actionBusy}
-                  onClick={() => void executeCreateTradeIntent()}
-                >
-                  Create TradeIntent
-                </button>
-
-                <hr className="border-shell-700" />
-
-                <label className="text-xs text-signal-slate">
-                  Discovery Actor
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={discoveryActor}
-                    onChange={(event) => setDiscoveryActor(event.target.value)}
-                  >
-                    {availableParties.filter((entry) => aliasOf(entry) !== "Outsider").map((entry) => (
-                      <option key={entry} value={entry}>{entry}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Discovery Owner
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={discoveryOwner}
-                    onChange={(event) => setDiscoveryOwner(event.target.value)}
-                  >
-                    {availableParties.filter((entry) => aliasOf(entry) !== "Outsider").map((entry) => (
-                      <option key={entry} value={entry}>{entry}</option>
-                    ))}
-                  </select>
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs text-signal-slate">
-                    Side
-                    <select
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={discoverySide}
-                      onChange={(event) => setDiscoverySide(event.target.value as "Buy" | "Sell")}
-                    >
-                      <option value="Sell">Sell</option>
-                      <option value="Buy">Buy</option>
-                    </select>
-                  </label>
-                  <label className="text-xs text-signal-slate">
-                    Strategy Tag
-                    <input
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={strategyTag}
-                      onChange={(event) => setStrategyTag(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="text-xs text-signal-slate">
-                  Discoverable By (CSV)
-                  <input
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={discoverableByCsv}
-                    onChange={(event) => setDiscoverableByCsv(event.target.value)}
-                  />
-                </label>
-                <button
-                  className="rounded-md bg-signal-amber px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
-                  disabled={actionBusy}
-                  onClick={() => void executeCreateDiscoveryInterest()}
-                >
-                  Post DiscoveryInterest
-                </button>
-              </div>
-            </article>
-
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <h3 className="text-lg font-semibold text-shell-950">Negotiation Controls</h3>
-              <div className="mt-3 grid gap-3">
-                <label className="text-xs text-signal-slate">
-                  Actor
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={negotiationActor}
-                    onChange={(event) => setNegotiationActor(event.target.value)}
-                  >
-                    {availableParties.filter((entry) => aliasOf(entry) !== "Outsider").map((entry) => (
-                      <option key={entry} value={entry}>{entry}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Choice
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={negotiationChoice}
-                    onChange={(event) => setNegotiationChoice(event.target.value as NegotiationChoice)}
-                  >
-                    <option value="SubmitSellerTerms">SubmitSellerTerms</option>
-                    <option value="SubmitBuyerTerms">SubmitBuyerTerms</option>
-                    <option value="AcceptBySeller">AcceptBySeller</option>
-                    <option value="AcceptByBuyer">AcceptByBuyer</option>
-                    <option value="CommitTerms">CommitTerms</option>
-                    <option value="RevealTerms">RevealTerms</option>
-                    <option value="ApproveMatch">ApproveMatch</option>
-                    <option value="StartSettlement">StartSettlement</option>
-                  </select>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Negotiation CID
-                  <input
-                    list="negotiation-cids"
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={negotiationCid}
-                    onChange={(event) => setNegotiationCid(event.target.value)}
-                  />
-                  <datalist id="negotiation-cids">
-                    {negotiations.map((item) => (
-                      <option key={item.contractId} value={item.contractId} />
-                    ))}
-                  </datalist>
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs text-signal-slate">
-                    Qty
-                    <input
-                      type="number"
-                      step="1"
-                      min="1"
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={negotiationQty}
-                      onChange={(event) => setNegotiationQty(event.target.value)}
-                    />
-                  </label>
-                  <label className="text-xs text-signal-slate">
-                    Unit Price
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={negotiationPrice}
-                      onChange={(event) => setNegotiationPrice(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs text-signal-slate">
-                    Side
-                    <select
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={negotiationSide}
-                      onChange={(event) => setNegotiationSide(event.target.value as "Buy" | "Sell")}
-                    >
-                      <option value="Sell">Sell</option>
-                      <option value="Buy">Buy</option>
-                    </select>
-                  </label>
-                  <label className="text-xs text-signal-slate">
-                    Salt
-                    <input
-                      className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                      value={negotiationSalt}
-                      onChange={(event) => setNegotiationSalt(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <button
-                  className="rounded-md bg-shell-950 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                  disabled={actionBusy}
-                  onClick={() => void executeNegotiationChoice()}
-                >
-                  Execute Negotiation Choice
-                </button>
-              </div>
-            </article>
-
-            <article className="rounded-2xl border border-shell-700 bg-white p-4">
-              <h3 className="text-lg font-semibold text-shell-950">Settlement + Proof Ops</h3>
-              <div className="mt-3 grid gap-3">
-                <label className="text-xs text-signal-slate">
-                  Settlement Actor
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={settlementActor}
-                    onChange={(event) => setSettlementActor(event.target.value)}
-                  >
-                    {availableParties.filter((entry) => aliasOf(entry) !== "Outsider").map((entry) => (
-                      <option key={entry} value={entry}>{entry}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Choice
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={settlementChoice}
-                    onChange={(event) => setSettlementChoice(event.target.value as SettlementChoice)}
-                  >
-                    <option value="SimpleFinalizeSettlement">SimpleFinalizeSettlement</option>
-                    <option value="FinalizeSettlement">FinalizeSettlement</option>
-                  </select>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Settlement CID
-                  <input
-                    list="settlement-cids"
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={settlementCid}
-                    onChange={(event) => setSettlementCid(event.target.value)}
-                  />
-                  <datalist id="settlement-cids">
-                    {settlements.map((item) => (
-                      <option key={item.contractId} value={item.contractId} />
-                    ))}
-                  </datalist>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Seller Asset CID
-                  <input
-                    list="asset-cids"
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={sellerAssetCid}
-                    onChange={(event) => setSellerAssetCid(event.target.value)}
-                  />
-                  <datalist id="asset-cids">
-                    {assetHoldings.map((item) => (
-                      <option key={item.contractId} value={item.contractId} />
-                    ))}
-                  </datalist>
-                </label>
-                <label className="text-xs text-signal-slate">
-                  Buyer Cash CID
-                  <input
-                    list="cash-cids"
-                    className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-1.5 text-shell-950"
-                    value={buyerCashCid}
-                    onChange={(event) => setBuyerCashCid(event.target.value)}
-                  />
-                  <datalist id="cash-cids">
-                    {cashHoldings.map((item) => (
-                      <option key={item.contractId} value={item.contractId} />
-                    ))}
-                  </datalist>
-                </label>
-                <button
-                  className="rounded-md bg-signal-coral px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
-                  disabled={actionBusy}
-                  onClick={() => void executeSettlementChoice()}
-                >
-                  Execute Settlement Choice
-                </button>
-
-                <hr className="border-shell-700" />
-
-                <div className="rounded-lg border border-shell-700 bg-shell-900/5 p-3">
-                  <p className="text-xs uppercase tracking-[0.12em] text-signal-slate">Outsider Proof Snapshot</p>
-                  <p className={`mt-1 text-lg font-semibold ${outsiderVisibilityTotal === 0 ? "text-signal-mint" : "text-signal-coral"}`}>
-                    Visibility Count: {outsiderVisibilityTotal}
-                  </p>
-                  <p className="text-xs text-signal-slate">
-                    Last probe: {outsiderSnapshot.updatedAt ? new Date(outsiderSnapshot.updatedAt).toLocaleTimeString() : "pending"}
-                  </p>
-                  {redTeamAttempts.length > 0 ? (
-                    <p className="mt-1 text-xs text-signal-slate">Latest: {redTeamAttempts[0].message}</p>
-                  ) : null}
-                </div>
-              </div>
-            </article>
+        <section className="panel-shell">
+          <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Manual Demo Flow</p>
+          <div className="mt-3">
+            <FlowView
+              party={party}
+              availableParties={availableParties}
+              tradeIntents={tradeIntents}
+              discoveryInterests={discoveryInterests}
+              negotiations={negotiations}
+              settlements={settlements}
+              auditRecords={auditRecords}
+              assetHoldings={assetHoldings}
+              cashHoldings={cashHoldings}
+              onSwitchParty={(nextParty) => setParty(nextParty)}
+              onRefresh={refreshAllViews}
+              onLog={addLog}
+            />
           </div>
         </section>
+
 
         {error ? (
           <div className="rounded-xl border border-signal-coral/40 bg-signal-coral/10 p-3 text-sm text-signal-coral">
@@ -1780,14 +1554,6 @@ export default function App() {
           </div>
         ) : null}
 
-        <section className="rounded-3xl border border-shell-700 bg-white/80 p-5 backdrop-blur-xl">
-          <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Demo Story Cue</p>
-          <p className="mt-2 text-sm text-signal-slate">
-            {leakPreview
-              ? `Legacy leak model exposes ${leakPreview.instrument}, size ${Math.round(leakPreview.quantity).toLocaleString()}, and price floor ${leakPreview.minPrice.toFixed(2)}. Canton keeps outsider visibility at ${outsiderVisibilityTotal}.`
-              : "Create a TradeIntent to populate a live leak-vs-privacy narrative cue."}
-          </p>
-        </section>
       </div>
 
       {matchToast ? (

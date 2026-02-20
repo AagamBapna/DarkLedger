@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   TEMPLATE_IDS,
   createContract,
   exerciseChoice,
   optionalToNumber,
   queryDiscoveryInterests,
-  queryPrivateNegotiations,
-  queryTradeSettlements,
 } from "../lib/ledgerClient";
 import type {
   AgentLogEntry,
@@ -57,15 +55,15 @@ interface ReplayStage {
 }
 
 function resolveAlias(availableParties: string[], alias: string): string {
-  const exact = availableParties.find((party) => party === alias);
+  const exact = availableParties.find((partyId) => partyId === alias);
   if (exact) return exact;
-  const qualified = availableParties.find((party) => party.startsWith(`${alias}::`));
+  const qualified = availableParties.find((partyId) => partyId.startsWith(`${alias}::`));
   if (qualified) return qualified;
   return alias;
 }
 
-function aliasOf(party: string): string {
-  return party.includes("::") ? party.split("::")[0] : party;
+function aliasOf(partyId: string): string {
+  return partyId.includes("::") ? partyId.split("::")[0] : partyId;
 }
 
 function matchesParty(left: string, right: string): boolean {
@@ -82,10 +80,6 @@ function sideTag(value: string | { tag?: string } | Record<string, unknown>): st
   return "";
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function discoveryTtlWindow(ttlSeconds: number = 300): { createdAt: string; expiresAt: string } {
   const created = new Date();
   const expires = new Date(created.getTime() + ttlSeconds * 1000);
@@ -99,7 +93,7 @@ async function sha256Hex(value: string): Promise<string> {
   const data = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", data);
   const bytes = Array.from(new Uint8Array(digest));
-  return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function commitmentHashForTerms(qtyText: string, unitPriceText: string, salt: string): Promise<string> {
@@ -110,9 +104,7 @@ function optionalText(value: string | null | { tag: "Some" | "None"; value?: str
   if (value === null || value === undefined) return null;
   if (typeof value === "string") return value;
   if (typeof value === "object" && "tag" in value) {
-    if (value.tag === "Some") {
-      return value.value ?? null;
-    }
+    if (value.tag === "Some") return value.value ?? null;
     return null;
   }
   return null;
@@ -125,14 +117,14 @@ function shortHash(value: string | null): string {
 
 function pseudonymToken(value: string): string {
   let acc = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    acc = (acc * 33 + value.charCodeAt(i)) >>> 0;
+  for (let index = 0; index < value.length; index += 1) {
+    acc = (acc * 33 + value.charCodeAt(index)) >>> 0;
   }
   return acc.toString(16).toUpperCase().slice(-4).padStart(4, "0");
 }
 
-function maskedParty(role: "Buyer" | "Seller", party: string): string {
-  return `${role}-${pseudonymToken(aliasOf(party))}`;
+function maskedParty(role: "Buyer" | "Seller", partyId: string): string {
+  return `${role}-${pseudonymToken(aliasOf(partyId))}`;
 }
 
 function shouldRevealIdentities(
@@ -169,6 +161,13 @@ function counterpartyLine(
   return `${maskedParty("Seller", negotiation.seller)} ↔ ${maskedParty("Buyer", negotiation.buyer)}`;
 }
 
+function normalizeActionError(message: string): string {
+  if (message.includes("DAML_AUTHORIZATION_ERROR")) {
+    return "Authorization failed for this choice. Use Seller for TradeIntent, agents for negotiation choices, and Company for issuer or settlement choices.";
+  }
+  return message.length > 260 ? `${message.slice(0, 260)}...` : message;
+}
+
 export function FlowView({
   party,
   availableParties,
@@ -194,21 +193,25 @@ export function FlowView({
     [availableParties],
   );
 
-  const [orderActor, setOrderActor] = useState<string>(seller);
   const [instrument, setInstrument] = useState("COMPANY-SERIES-A");
-  const [quantity, setQuantity] = useState("1500");
-  const [minPrice, setMinPrice] = useState("95");
-  const [strategyTag, setStrategyTag] = useState("manual-ui");
-  const [discoverySide, setDiscoverySide] = useState<"Buy" | "Sell">("Buy");
+  const [quantity, setQuantity] = useState("1200");
+  const [minPrice, setMinPrice] = useState("98");
+
+  const [discoveryActor, setDiscoveryActor] = useState<string>(sellerAgent);
+  const [discoveryOwner, setDiscoveryOwner] = useState<string>(seller);
+  const [strategyTag, setStrategyTag] = useState("control-tower");
+  const [discoverySide, setDiscoverySide] = useState<"Buy" | "Sell">("Sell");
   const [discoverableByCsv, setDiscoverableByCsv] = useState(`${buyerAgent}`);
+  const [sellDiscoveryCid, setSellDiscoveryCid] = useState("");
+  const [buyDiscoveryCid, setBuyDiscoveryCid] = useState("");
 
   const [negotiationActor, setNegotiationActor] = useState<string>(sellerAgent);
   const [negotiationChoice, setNegotiationChoice] = useState<NegotiationChoice>("SubmitSellerTerms");
   const [negotiationCid, setNegotiationCid] = useState("");
   const [negotiationQty, setNegotiationQty] = useState("1000");
-  const [negotiationPrice, setNegotiationPrice] = useState("98");
+  const [negotiationPrice, setNegotiationPrice] = useState("99");
   const [negotiationSide, setNegotiationSide] = useState<"Buy" | "Sell">("Sell");
-  const [negotiationSalt, setNegotiationSalt] = useState("manual-commit-salt");
+  const [negotiationSalt, setNegotiationSalt] = useState("control-tower-salt");
 
   const [settlementActor, setSettlementActor] = useState<string>(company);
   const [settlementChoice, setSettlementChoice] = useState<SettlementChoice>("SimpleFinalizeSettlement");
@@ -219,42 +222,7 @@ export function FlowView({
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [demoRunning, setDemoRunning] = useState(false);
-  const [demoStep, setDemoStep] = useState<string | null>(null);
-  const [judgePauseEnabled, setJudgePauseEnabled] = useState(true);
-  const [judgePauseGate, setJudgePauseGate] = useState<{ title: string; hint: string } | null>(null);
-
-  const [replayPlaying, setReplayPlaying] = useState(false);
   const [replayIndex, setReplayIndex] = useState(0);
-
-  const pauseResolverRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    if (!availableParties.includes(orderActor) && executableParties.length > 0) {
-      setOrderActor(executableParties[0]);
-    }
-  }, [availableParties, executableParties, orderActor]);
-
-  useEffect(() => {
-    if (!negotiationCid && negotiations.length > 0) {
-      setNegotiationCid(negotiations[0].contractId);
-    }
-  }, [negotiationCid, negotiations]);
-
-  useEffect(() => {
-    if (!settlementCid && settlements.length > 0) {
-      setSettlementCid(settlements[0].contractId);
-    }
-  }, [settlementCid, settlements]);
-
-  useEffect(() => {
-    if (!sellerAssetCid && assetHoldings.length > 0) {
-      setSellerAssetCid(assetHoldings[0].contractId);
-    }
-    if (!buyerCashCid && cashHoldings.length > 0) {
-      setBuyerCashCid(cashHoldings[0].contractId);
-    }
-  }, [assetHoldings, buyerCashCid, cashHoldings, sellerAssetCid]);
 
   const replayStages = useMemo<ReplayStage[]>(
     () => [
@@ -263,49 +231,39 @@ export function FlowView({
         count: tradeIntents.length,
         accent: "text-signal-mint",
         visibleTo: ["Seller", "SellerAgent", "Company"],
-        note: "Seller posts intent privately. Buyer side and Outsider see nothing.",
+        note: "Seller posts intent privately. Buyer-side and outsider still see zero.",
       },
       {
         label: "Discovery",
         count: discoveryInterests.length,
         accent: "text-signal-amber",
         visibleTo: ["Owner", "PostingAgent", "Company", "DiscoverableBy"],
-        note: "Blind signal only. Quantity and price stay hidden.",
+        note: "Only a blind signal is visible, not full order details.",
       },
       {
         label: "Negotiation",
         count: negotiations.length,
         accent: "text-signal-coral",
         visibleTo: ["Seller", "SellerAgent", "Buyer", "BuyerAgent", "Company"],
-        note: "Counterparties remain masked for non-issuer viewers.",
+        note: "Commit-reveal keeps exact terms protected until both sides reveal.",
       },
       {
         label: "Approval",
         count: negotiations.filter((item) => item.payload.issuerApproved).length,
         accent: "text-signal-mint",
         visibleTo: ["Company + negotiation parties"],
-        note: "Issuer gate checks commit + reveal integrity before approving.",
+        note: "Issuer gate confirms commitments and reveals before settlement.",
       },
       {
         label: "Settlement",
         count: settlements.length,
         accent: "text-signal-amber",
         visibleTo: ["Settlement participants + issuer"],
-        note: "Final DvP + audit record. Real identities become explicit for issuer/settlement views.",
+        note: "DvP finalization produces auditable completion without outsider leakage.",
       },
     ],
     [discoveryInterests.length, negotiations, settlements.length, tradeIntents.length],
   );
-
-  useEffect(() => {
-    if (!replayPlaying || replayStages.length === 0) return;
-    const timer = window.setInterval(() => {
-      setReplayIndex((prev) => (prev + 1) % replayStages.length);
-    }, 1400);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [replayPlaying, replayStages.length]);
 
   const partyUniverse = useMemo(
     () => ["Seller", "SellerAgent", "Buyer", "BuyerAgent", "Company", "Outsider"],
@@ -353,9 +311,86 @@ export function FlowView({
   const selectedBuyerHash = optionalText(selectedNegotiation?.payload.buyerCommitmentHash ?? null);
   const termsFullyRevealed = Boolean(
     selectedNegotiation
-    && selectedNegotiation.payload.sellerTermsRevealed
-    && selectedNegotiation.payload.buyerTermsRevealed,
+      && selectedNegotiation.payload.sellerTermsRevealed
+      && selectedNegotiation.payload.buyerTermsRevealed,
   );
+
+  const discoveryActorOptions = useMemo(
+    () => [sellerAgent, buyerAgent].filter((value, index, all) => Boolean(value) && all.indexOf(value) === index),
+    [buyerAgent, sellerAgent],
+  );
+
+  const negotiationActorOptions = useMemo(() => {
+    switch (negotiationChoice) {
+      case "SubmitSellerTerms":
+      case "AcceptBySeller":
+        return [sellerAgent];
+      case "SubmitBuyerTerms":
+      case "AcceptByBuyer":
+        return [buyerAgent];
+      case "ApproveMatch":
+      case "StartSettlement":
+        return [company];
+      default:
+        return [sellerAgent, buyerAgent];
+    }
+  }, [buyerAgent, company, negotiationChoice, sellerAgent]);
+
+  useEffect(() => {
+    if (!negotiations.length) return;
+    if (!negotiationCid) setNegotiationCid(negotiations[0].contractId);
+  }, [negotiationCid, negotiations]);
+
+  useEffect(() => {
+    if (!settlements.length) return;
+    if (!settlementCid) setSettlementCid(settlements[0].contractId);
+  }, [settlementCid, settlements]);
+
+  useEffect(() => {
+    if (!sellerAssetCid && assetHoldings.length > 0) {
+      setSellerAssetCid(assetHoldings[0].contractId);
+    }
+    if (!buyerCashCid && cashHoldings.length > 0) {
+      setBuyerCashCid(cashHoldings[0].contractId);
+    }
+  }, [assetHoldings, buyerCashCid, cashHoldings, sellerAssetCid]);
+
+  useEffect(() => {
+    if (!discoveryActorOptions.includes(discoveryActor) && discoveryActorOptions.length > 0) {
+      setDiscoveryActor(discoveryActorOptions[0]);
+    }
+  }, [discoveryActor, discoveryActorOptions]);
+
+  useEffect(() => {
+    const actorAlias = aliasOf(discoveryActor);
+    if (actorAlias === "SellerAgent") {
+      setDiscoveryOwner(seller);
+      if (!discoverableByCsv) setDiscoverableByCsv(buyerAgent);
+      return;
+    }
+    if (actorAlias === "BuyerAgent") {
+      setDiscoveryOwner(buyer);
+      if (!discoverableByCsv) setDiscoverableByCsv(sellerAgent);
+    }
+  }, [buyer, buyerAgent, discoverableByCsv, discoveryActor, seller, sellerAgent]);
+
+  useEffect(() => {
+    if (!negotiationActorOptions.includes(negotiationActor) && negotiationActorOptions.length > 0) {
+      setNegotiationActor(negotiationActorOptions[0]);
+    }
+  }, [negotiationActor, negotiationActorOptions]);
+
+  useEffect(() => {
+    if (!discoveryInterests.length) return;
+    if (!sellDiscoveryCid) {
+      const firstSell = discoveryInterests.find((row) => sideTag(row.payload.side) === "Sell");
+      if (firstSell) setSellDiscoveryCid(firstSell.contractId);
+    }
+    if (!buyDiscoveryCid) {
+      const firstBuy = discoveryInterests.find((row) => sideTag(row.payload.side) === "Buy");
+      if (firstBuy) setBuyDiscoveryCid(firstBuy.contractId);
+    }
+  }, [buyDiscoveryCid, discoveryInterests, sellDiscoveryCid]);
 
   const runAction = async (description: string, action: () => Promise<void>) => {
     setBusy(true);
@@ -370,8 +405,9 @@ export function FlowView({
         metadata: description,
       });
       await onRefresh();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Action failed";
+    } catch (reason) {
+      const rawMessage = reason instanceof Error ? reason.message : String(reason);
+      const message = normalizeActionError(rawMessage);
       setErrorMessage(message);
       onLog({
         source: "ui-action",
@@ -384,8 +420,8 @@ export function FlowView({
   };
 
   const createTradeIntent = async () => {
-    await runAction(`TradeIntent created by ${orderActor}`, async () => {
-      await createContract(orderActor, TEMPLATE_IDS.tradeIntent, {
+    await runAction(`TradeIntent created by ${seller}`, async () => {
+      await createContract(seller, TEMPLATE_IDS.tradeIntent, {
         issuer: company,
         seller,
         sellerAgent,
@@ -402,11 +438,11 @@ export function FlowView({
       .map((entry) => entry.trim())
       .filter(Boolean);
     const ttl = discoveryTtlWindow();
-    await runAction(`DiscoveryInterest (${discoverySide}) posted by ${orderActor}`, async () => {
-      await createContract(orderActor, TEMPLATE_IDS.discoveryInterest, {
+    await runAction(`DiscoveryInterest (${discoverySide}) posted by ${discoveryActor}`, async () => {
+      await createContract(discoveryActor, TEMPLATE_IDS.discoveryInterest, {
         issuer: company,
-        owner: orderActor,
-        postingAgent: orderActor,
+        owner: discoveryOwner,
+        postingAgent: discoveryActor,
         discoverableBy,
         instrument,
         side: { tag: discoverySide, value: {} },
@@ -417,13 +453,41 @@ export function FlowView({
     });
   };
 
+  const matchDiscoveryPair = async () => {
+    await runAction("Company matched discovery pair into private negotiation", async () => {
+      const rows = await queryDiscoveryInterests(company);
+      const scoped = rows.filter((item) => {
+        if (item.payload.instrument !== instrument) return false;
+        if (!strategyTag) return true;
+        return item.payload.strategyTag === strategyTag;
+      });
+
+      const selectedSell = sellDiscoveryCid
+        ? scoped.find((row) => row.contractId === sellDiscoveryCid)
+        : scoped.find((row) => sideTag(row.payload.side) === "Sell");
+      const selectedBuy = buyDiscoveryCid
+        ? scoped.find((row) => row.contractId === buyDiscoveryCid)
+        : scoped.find((row) => sideTag(row.payload.side) === "Buy");
+
+      if (!selectedSell || !selectedBuy) {
+        throw new Error("Need one Sell and one Buy discovery contract for matching. Switch to Company and refresh if IDs are missing.");
+      }
+
+      await exerciseChoice(company, TEMPLATE_IDS.discoveryInterest, selectedSell.contractId, "MatchWith", {
+        counterpartyCid: selectedBuy.contractId,
+      });
+    });
+  };
+
   const executeNegotiationChoice = async () => {
     if (!negotiationCid) {
       setErrorMessage("Choose a negotiation contract ID first.");
       return;
     }
+
     await runAction(`${negotiationChoice} by ${negotiationActor}`, async () => {
       let argument: Record<string, unknown> = {};
+
       if (negotiationChoice === "SubmitSellerTerms" || negotiationChoice === "SubmitBuyerTerms") {
         argument = {
           qty: Number.parseFloat(negotiationQty),
@@ -445,6 +509,7 @@ export function FlowView({
           salt: negotiationSalt,
         };
       }
+
       await exerciseChoice(
         negotiationActor,
         TEMPLATE_IDS.privateNegotiation,
@@ -460,6 +525,7 @@ export function FlowView({
       setErrorMessage("Choose a settlement contract ID first.");
       return;
     }
+
     await runAction(`${settlementChoice} by ${settlementActor}`, async () => {
       if (settlementChoice === "FinalizeSettlement") {
         await exerciseChoice(
@@ -471,6 +537,7 @@ export function FlowView({
         );
         return;
       }
+
       await exerciseChoice(
         settlementActor,
         TEMPLATE_IDS.tradeSettlement,
@@ -481,298 +548,28 @@ export function FlowView({
     });
   };
 
-  const waitForJudgePause = async (title: string, hint: string) => {
-    if (!judgePauseEnabled) return;
-    setJudgePauseGate({ title, hint });
-    await new Promise<void>((resolve) => {
-      pauseResolverRef.current = resolve;
-    });
-    setJudgePauseGate(null);
-  };
-
-  const continueJudgeScript = () => {
-    const resolver = pauseResolverRef.current;
-    if (!resolver) return;
-    pauseResolverRef.current = null;
-    resolver();
-  };
-
-  const runGuidedDemo = async () => {
-    if (demoRunning) return;
-
-    setBusy(true);
-    setDemoRunning(true);
-    setStatusMessage(null);
-    setErrorMessage(null);
-
-    const runTag = `judge-ui-${Date.now().toString().slice(-6)}`;
-    let scriptNegotiationCid = "";
-
-    const resolveCurrentNegotiationCid = async (): Promise<string> => {
-      const rows = await queryPrivateNegotiations(company);
-      const match = rows.find(
-        (item) =>
-          item.payload.instrument === instrument
-          && matchesParty(item.payload.sellerAgent, sellerAgent)
-          && matchesParty(item.payload.buyerAgent, buyerAgent),
-      );
-      if (!match) {
-        throw new Error("Could not resolve active negotiation contract.");
-      }
-      return match.contractId;
-    };
-
-    const runStep = async (label: string, activeParty: string, action: () => Promise<void>) => {
-      setDemoStep(label);
-      onSwitchParty(activeParty);
-      await delay(550);
-      await action();
-      onLog({
-        source: "ui-action",
-        decision: "Judge mode step completed",
-        metadata: label,
-      });
-      await onRefresh();
-      await delay(500);
-    };
-
-    try {
-      const qty = Number.parseFloat(quantity) || 1000;
-      const px = Number.parseFloat(minPrice) || 95;
-
-      await runStep("1/6 Seller posts private TradeIntent", seller, async () => {
-        await createContract(seller, TEMPLATE_IDS.tradeIntent, {
-          issuer: company,
-          seller,
-          sellerAgent,
-          instrument,
-          quantity: qty,
-          minPrice: px,
-        });
-      });
-      await waitForJudgePause(
-        "Proof Moment: Visibility Shock",
-        "Use the top switch to flip Seller -> Outsider on this contract ID and show disappearance.",
-      );
-
-      await runStep("2/6 SellerAgent posts blind sell discovery", sellerAgent, async () => {
-        const ttl = discoveryTtlWindow();
-        await createContract(sellerAgent, TEMPLATE_IDS.discoveryInterest, {
-          issuer: company,
-          owner: seller,
-          postingAgent: sellerAgent,
-          discoverableBy: [buyerAgent],
-          instrument,
-          side: { tag: "Sell", value: {} },
-          strategyTag: runTag,
-          createdAt: ttl.createdAt,
-          expiresAt: ttl.expiresAt,
-        });
-      });
-
-      await runStep("3/6 BuyerAgent posts blind buy discovery", buyerAgent, async () => {
-        const ttl = discoveryTtlWindow();
-        await createContract(buyerAgent, TEMPLATE_IDS.discoveryInterest, {
-          issuer: company,
-          owner: buyer,
-          postingAgent: buyerAgent,
-          discoverableBy: [sellerAgent],
-          instrument,
-          side: { tag: "Buy", value: {} },
-          strategyTag: runTag,
-          createdAt: ttl.createdAt,
-          expiresAt: ttl.expiresAt,
-        });
-      });
-      await waitForJudgePause(
-        "Proof Moment: No Public Order Book",
-        "Point to leak-comparison panel: only blind signals exist before matching.",
-      );
-
-      await runStep("4/6 Company matches discovery -> private negotiation", company, async () => {
-        const before = await queryPrivateNegotiations(company);
-        const beforeIds = new Set(before.map((item) => item.contractId));
-
-        const discoveries = await queryDiscoveryInterests(company);
-        const sellDiscovery = discoveries.find(
-          (item) =>
-            sideTag(item.payload.side) === "Sell"
-            && item.payload.instrument === instrument
-            && item.payload.strategyTag === runTag
-            && matchesParty(item.payload.postingAgent, sellerAgent),
-        );
-        const buyDiscovery = discoveries.find(
-          (item) =>
-            sideTag(item.payload.side) === "Buy"
-            && item.payload.instrument === instrument
-            && item.payload.strategyTag === runTag
-            && matchesParty(item.payload.postingAgent, buyerAgent),
-        );
-
-        if (!sellDiscovery || !buyDiscovery) {
-          throw new Error("Could not find scripted discovery interests for matching.");
-        }
-
-        await exerciseChoice(company, TEMPLATE_IDS.discoveryInterest, sellDiscovery.contractId, "MatchWith", {
-          counterpartyCid: buyDiscovery.contractId,
-        });
-
-        const after = await queryPrivateNegotiations(company);
-        const created = after.find((item) => !beforeIds.has(item.contractId));
-        if (!created) {
-          throw new Error("Match created no visible PrivateNegotiation contract.");
-        }
-        scriptNegotiationCid = created.contractId;
-      });
-
-      await runStep("5/6 Agents commit hashes, then reveal terms", sellerAgent, async () => {
-        if (!scriptNegotiationCid) {
-          throw new Error("Judge mode missing negotiation contract ID.");
-        }
-        const qtyText = String(qty);
-        const unitPriceText = String(px);
-        const sellerSalt = "judge-seller-salt";
-        const buyerSalt = "judge-buyer-salt";
-        const sellerHash = await commitmentHashForTerms(qtyText, unitPriceText, sellerSalt);
-        const buyerHash = await commitmentHashForTerms(qtyText, unitPriceText, buyerSalt);
-
-        await exerciseChoice(sellerAgent, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "SubmitSellerTerms", {
-          qty,
-          unitPrice: px,
-        });
-        scriptNegotiationCid = await resolveCurrentNegotiationCid();
-        await exerciseChoice(buyerAgent, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "AcceptByBuyer", {});
-        scriptNegotiationCid = await resolveCurrentNegotiationCid();
-        await exerciseChoice(sellerAgent, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "AcceptBySeller", {});
-        scriptNegotiationCid = await resolveCurrentNegotiationCid();
-
-        await exerciseChoice(sellerAgent, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "CommitTerms", {
-          side: { tag: "Sell", value: {} },
-          commitmentHash: sellerHash,
-        });
-        scriptNegotiationCid = await resolveCurrentNegotiationCid();
-        await exerciseChoice(buyerAgent, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "CommitTerms", {
-          side: { tag: "Buy", value: {} },
-          commitmentHash: buyerHash,
-        });
-        scriptNegotiationCid = await resolveCurrentNegotiationCid();
-
-        await exerciseChoice(sellerAgent, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "RevealTerms", {
-          side: { tag: "Sell", value: {} },
-          qtyText,
-          unitPriceText,
-          salt: sellerSalt,
-        });
-        scriptNegotiationCid = await resolveCurrentNegotiationCid();
-        await exerciseChoice(buyerAgent, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "RevealTerms", {
-          side: { tag: "Buy", value: {} },
-          qtyText,
-          unitPriceText,
-          salt: buyerSalt,
-        });
-        scriptNegotiationCid = await resolveCurrentNegotiationCid();
-      });
-      await waitForJudgePause(
-        "Proof Moment: Commit-Reveal Theater",
-        "Open the commit-reveal panel and show hashes first, terms unlocked after reveal.",
-      );
-
-      await runStep("6/6 Company approves + settles", company, async () => {
-        if (!scriptNegotiationCid) {
-          throw new Error("Judge mode missing negotiation contract ID.");
-        }
-        await exerciseChoice(company, TEMPLATE_IDS.privateNegotiation, scriptNegotiationCid, "ApproveMatch", {});
-
-        const afterApprove = await queryPrivateNegotiations(company);
-        const approved = afterApprove.find(
-          (item) =>
-            item.payload.issuerApproved
-            && item.payload.instrument === instrument
-            && matchesParty(item.payload.sellerAgent, sellerAgent)
-            && matchesParty(item.payload.buyerAgent, buyerAgent),
-        );
-        if (!approved) {
-          throw new Error("Issuer-approved negotiation not found.");
-        }
-
-        const settlementsBefore = await queryTradeSettlements(company);
-        const beforeIds = new Set(settlementsBefore.map((item) => item.contractId));
-
-        await exerciseChoice(company, TEMPLATE_IDS.privateNegotiation, approved.contractId, "StartSettlement", {});
-
-        const settlementsAfter = await queryTradeSettlements(company);
-        const created = settlementsAfter.find((item) => !beforeIds.has(item.contractId));
-        if (!created) {
-          throw new Error("StartSettlement did not create a visible settlement contract.");
-        }
-        await exerciseChoice(company, TEMPLATE_IDS.tradeSettlement, created.contractId, "SimpleFinalizeSettlement", {});
-      });
-      await waitForJudgePause(
-        "Proof Moment: Settlement + Identity Reveal",
-        "Switch to issuer/compliance view to show real counterparties and immutable audit output.",
-      );
-
-      setStatusMessage("Judge mode complete. Capture outsider proof, commit-reveal panel, and final settlement cards.");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Judge mode failed";
-      setErrorMessage(message);
-      onLog({
-        source: "ui-action",
-        decision: "Judge mode failed",
-        metadata: message,
-      });
-    } finally {
-      setBusy(false);
-      setDemoRunning(false);
-      setDemoStep(null);
-      setJudgePauseGate(null);
-      pauseResolverRef.current = null;
-    }
-  };
-
   const currentReplayStage = replayStages[replayIndex] ?? replayStages[0];
+  const showNegotiationTerms = ["SubmitSellerTerms", "SubmitBuyerTerms", "CommitTerms", "RevealTerms"].includes(negotiationChoice);
+  const showNegotiationSide = negotiationChoice === "CommitTerms" || negotiationChoice === "RevealTerms";
+  const showSalt = negotiationChoice === "RevealTerms" || negotiationChoice === "CommitTerms";
+
+  const fieldClass = "mt-1 w-full rounded-md border border-shell-700 bg-white px-3 py-2 text-shell-950";
 
   return (
     <section className="space-y-6">
       <div className="rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
-        <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Live Flow</p>
-        <h3 className="mt-2 text-xl font-semibold text-shell-950">Judge Mode + Multi-Party Command Studio</h3>
+        <p className="text-xs uppercase tracking-[0.24em] text-signal-slate">Live Action Console</p>
+        <h3 className="mt-2 text-xl font-semibold text-shell-950">Manual Lifecycle Controls</h3>
         <p className="mt-2 text-sm text-signal-slate">
-          One-click full private trade, pause on proof moments, and replay privacy visibility at every stage.
+          Manual presenter flow only. Nothing auto-rotates or advances unless you click it.
         </p>
 
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <button
-            className="rounded-md bg-shell-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={busy}
-            onClick={() => void runGuidedDemo()}
-          >
-            {demoRunning ? "Running Judge Script..." : "Run Full Private Trade (Judge Mode)"}
-          </button>
-          <label className="flex items-center gap-2 rounded-md border border-shell-700 bg-white px-3 py-1.5 text-xs text-signal-slate">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-signal-mint"
-              checked={judgePauseEnabled}
-              onChange={(event) => setJudgePauseEnabled(event.target.checked)}
-            />
-            Pause at proof checkpoints
-          </label>
-          {demoStep ? <p className="text-xs text-signal-slate">Current step: {demoStep}</p> : null}
+        <div className="mt-3 grid gap-2 text-xs text-signal-slate md:grid-cols-2">
+          <p>1. Seller creates TradeIntent, then agents post discovery signals.</p>
+          <p>2. Company matches discovery pair into one private negotiation.</p>
+          <p>3. Agents submit, commit, and reveal terms.</p>
+          <p>4. Company approves, starts settlement, and finalizes proof.</p>
         </div>
-
-        {judgePauseGate ? (
-          <div className="mt-3 rounded-lg border border-signal-amber/40 bg-signal-amber/10 p-3">
-            <p className="text-sm font-semibold text-shell-950">{judgePauseGate.title}</p>
-            <p className="mt-1 text-xs text-signal-slate">{judgePauseGate.hint}</p>
-            <button
-              className="mt-2 rounded-md bg-signal-amber px-3 py-1.5 text-xs font-semibold text-shell-950"
-              onClick={continueJudgeScript}
-            >
-              Continue Judge Script
-            </button>
-          </div>
-        ) : null}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {executableParties.map((entry) => (
@@ -794,17 +591,366 @@ export function FlowView({
           >
             Outsider Probe
           </button>
+          <button
+            className="rounded-full border border-shell-700 bg-white px-4 py-2 text-sm font-semibold text-shell-950"
+            onClick={() => void onRefresh()}
+            disabled={busy}
+          >
+            Refresh Ledger
+          </button>
+        </div>
+
+        {statusMessage ? (
+          <p className="mt-3 rounded-md border border-signal-mint/40 bg-signal-mint/10 px-3 py-2 text-xs text-shell-950">
+            {statusMessage}
+          </p>
+        ) : null}
+        {errorMessage ? (
+          <p className="mt-3 rounded-md border border-signal-coral/40 bg-signal-coral/10 px-3 py-2 text-xs text-signal-coral">
+            {errorMessage}
+          </p>
+        ) : null}
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-3">
+          <article className="rounded-lg border border-shell-700 bg-white/85 p-4">
+            <h4 className="text-lg font-semibold text-shell-950">Trade Intent + Discovery</h4>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Actor
+              <input className={fieldClass} value="Seller" disabled />
+            </label>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Instrument
+              <input className={fieldClass} value={instrument} onChange={(event) => setInstrument(event.target.value)} />
+            </label>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="text-xs text-signal-slate">
+                Quantity
+                <input className={fieldClass} value={quantity} onChange={(event) => setQuantity(event.target.value)} />
+              </label>
+              <label className="text-xs text-signal-slate">
+                Min Price
+                <input className={fieldClass} value={minPrice} onChange={(event) => setMinPrice(event.target.value)} />
+              </label>
+            </div>
+
+            <button
+              className="mt-3 w-full rounded-md bg-signal-mint px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
+              onClick={() => void createTradeIntent()}
+              disabled={busy}
+            >
+              Create TradeIntent
+            </button>
+
+            <hr className="my-4 border-shell-700" />
+
+            <label className="block text-xs text-signal-slate">
+              Discovery Actor
+              <select
+                className={fieldClass}
+                value={discoveryActor}
+                onChange={(event) => setDiscoveryActor(event.target.value)}
+              >
+                {discoveryActorOptions.map((entry) => (
+                  <option key={entry} value={entry}>{aliasOf(entry)}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Discovery Owner
+              <select
+                className={fieldClass}
+                value={discoveryOwner}
+                onChange={(event) => setDiscoveryOwner(event.target.value)}
+              >
+                <option value={seller}>Seller</option>
+                <option value={buyer}>Buyer</option>
+              </select>
+            </label>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="text-xs text-signal-slate">
+                Side
+                <select
+                  className={fieldClass}
+                  value={discoverySide}
+                  onChange={(event) => setDiscoverySide(event.target.value as "Buy" | "Sell")}
+                >
+                  <option value="Sell">Sell</option>
+                  <option value="Buy">Buy</option>
+                </select>
+              </label>
+              <label className="text-xs text-signal-slate">
+                Strategy Tag
+                <input className={fieldClass} value={strategyTag} onChange={(event) => setStrategyTag(event.target.value)} />
+              </label>
+            </div>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Discoverable By (CSV)
+              <input
+                className={fieldClass}
+                value={discoverableByCsv}
+                onChange={(event) => setDiscoverableByCsv(event.target.value)}
+              />
+            </label>
+
+            <button
+              className="mt-3 w-full rounded-md bg-[#a47832] px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
+              onClick={() => void createDiscoveryInterest()}
+              disabled={busy}
+            >
+              Post DiscoveryInterest
+            </button>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="text-xs text-signal-slate">
+                Sell Discovery CID
+                <input
+                  list="sell-discovery-cids"
+                  className={fieldClass}
+                  value={sellDiscoveryCid}
+                  onChange={(event) => setSellDiscoveryCid(event.target.value)}
+                  placeholder="optional"
+                />
+                <datalist id="sell-discovery-cids">
+                  {discoveryInterests
+                    .filter((row) => sideTag(row.payload.side) === "Sell")
+                    .map((row) => <option key={row.contractId} value={row.contractId} />)}
+                </datalist>
+              </label>
+              <label className="text-xs text-signal-slate">
+                Buy Discovery CID
+                <input
+                  list="buy-discovery-cids"
+                  className={fieldClass}
+                  value={buyDiscoveryCid}
+                  onChange={(event) => setBuyDiscoveryCid(event.target.value)}
+                  placeholder="optional"
+                />
+                <datalist id="buy-discovery-cids">
+                  {discoveryInterests
+                    .filter((row) => sideTag(row.payload.side) === "Buy")
+                    .map((row) => <option key={row.contractId} value={row.contractId} />)}
+                </datalist>
+              </label>
+            </div>
+
+            <button
+              className="mt-3 w-full rounded-md bg-shell-950 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={() => void matchDiscoveryPair()}
+              disabled={busy}
+            >
+              Match Discovery Pair (Company)
+            </button>
+          </article>
+
+          <article className="rounded-lg border border-shell-700 bg-white/85 p-4">
+            <h4 className="text-lg font-semibold text-shell-950">Negotiation Controls</h4>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Choice
+              <select
+                className={fieldClass}
+                value={negotiationChoice}
+                onChange={(event) => setNegotiationChoice(event.target.value as NegotiationChoice)}
+              >
+                <option value="SubmitSellerTerms">SubmitSellerTerms</option>
+                <option value="SubmitBuyerTerms">SubmitBuyerTerms</option>
+                <option value="AcceptBySeller">AcceptBySeller</option>
+                <option value="AcceptByBuyer">AcceptByBuyer</option>
+                <option value="CommitTerms">CommitTerms</option>
+                <option value="RevealTerms">RevealTerms</option>
+                <option value="ApproveMatch">ApproveMatch</option>
+                <option value="StartSettlement">StartSettlement</option>
+              </select>
+            </label>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Actor
+              <select
+                className={fieldClass}
+                value={negotiationActor}
+                onChange={(event) => setNegotiationActor(event.target.value)}
+              >
+                {negotiationActorOptions.map((entry) => (
+                  <option key={entry} value={entry}>{aliasOf(entry)}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Negotiation CID
+              <input
+                list="negotiation-cids"
+                className={fieldClass}
+                value={negotiationCid}
+                onChange={(event) => setNegotiationCid(event.target.value)}
+              />
+              <datalist id="negotiation-cids">
+                {negotiations.map((row) => (
+                  <option key={row.contractId} value={row.contractId} />
+                ))}
+              </datalist>
+            </label>
+
+            {showNegotiationTerms ? (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-signal-slate">
+                  Qty
+                  <input className={fieldClass} value={negotiationQty} onChange={(event) => setNegotiationQty(event.target.value)} />
+                </label>
+                <label className="text-xs text-signal-slate">
+                  Unit Price
+                  <input
+                    className={fieldClass}
+                    value={negotiationPrice}
+                    onChange={(event) => setNegotiationPrice(event.target.value)}
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            {showNegotiationSide ? (
+              <label className="mt-3 block text-xs text-signal-slate">
+                Side
+                <select
+                  className={fieldClass}
+                  value={negotiationSide}
+                  onChange={(event) => setNegotiationSide(event.target.value as "Buy" | "Sell")}
+                >
+                  <option value="Sell">Sell</option>
+                  <option value="Buy">Buy</option>
+                </select>
+              </label>
+            ) : null}
+
+            {showSalt ? (
+              <label className="mt-3 block text-xs text-signal-slate">
+                Salt
+                <input
+                  className={fieldClass}
+                  value={negotiationSalt}
+                  onChange={(event) => setNegotiationSalt(event.target.value)}
+                />
+              </label>
+            ) : null}
+
+            <button
+              className="mt-3 w-full rounded-md bg-shell-950 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={() => void executeNegotiationChoice()}
+              disabled={busy}
+            >
+              Execute Negotiation Choice
+            </button>
+          </article>
+
+          <article className="rounded-lg border border-shell-700 bg-white/85 p-4">
+            <h4 className="text-lg font-semibold text-shell-950">Settlement + Proof Ops</h4>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Settlement Actor
+              <select
+                className={fieldClass}
+                value={settlementActor}
+                onChange={(event) => setSettlementActor(event.target.value)}
+              >
+                <option value={company}>Company</option>
+              </select>
+            </label>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Choice
+              <select
+                className={fieldClass}
+                value={settlementChoice}
+                onChange={(event) => setSettlementChoice(event.target.value as SettlementChoice)}
+              >
+                <option value="SimpleFinalizeSettlement">SimpleFinalizeSettlement</option>
+                <option value="FinalizeSettlement">FinalizeSettlement</option>
+              </select>
+            </label>
+
+            <label className="mt-3 block text-xs text-signal-slate">
+              Settlement CID
+              <input
+                list="settlement-cids"
+                className={fieldClass}
+                value={settlementCid}
+                onChange={(event) => setSettlementCid(event.target.value)}
+              />
+              <datalist id="settlement-cids">
+                {settlements.map((row) => (
+                  <option key={row.contractId} value={row.contractId} />
+                ))}
+              </datalist>
+            </label>
+
+            {settlementChoice === "FinalizeSettlement" ? (
+              <>
+                <label className="mt-3 block text-xs text-signal-slate">
+                  Seller Asset CID
+                  <input
+                    list="seller-asset-cids"
+                    className={fieldClass}
+                    value={sellerAssetCid}
+                    onChange={(event) => setSellerAssetCid(event.target.value)}
+                  />
+                  <datalist id="seller-asset-cids">
+                    {assetHoldings.map((row) => (
+                      <option key={row.contractId} value={row.contractId} />
+                    ))}
+                  </datalist>
+                </label>
+
+                <label className="mt-3 block text-xs text-signal-slate">
+                  Buyer Cash CID
+                  <input
+                    list="buyer-cash-cids"
+                    className={fieldClass}
+                    value={buyerCashCid}
+                    onChange={(event) => setBuyerCashCid(event.target.value)}
+                  />
+                  <datalist id="buyer-cash-cids">
+                    {cashHoldings.map((row) => (
+                      <option key={row.contractId} value={row.contractId} />
+                    ))}
+                  </datalist>
+                </label>
+              </>
+            ) : null}
+
+            <button
+              className="mt-3 w-full rounded-md bg-shell-950 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={() => void executeSettlementChoice()}
+              disabled={busy}
+            >
+              Execute Settlement Choice
+            </button>
+
+            <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-md border border-shell-700 bg-white p-2 text-signal-slate">Intents: {tradeIntents.length}</div>
+              <div className="rounded-md border border-shell-700 bg-white p-2 text-signal-slate">Discovery: {discoveryInterests.length}</div>
+              <div className="rounded-md border border-shell-700 bg-white p-2 text-signal-slate">Negotiations: {negotiations.length}</div>
+              <div className="rounded-md border border-shell-700 bg-white p-2 text-signal-slate">Settlements: {settlements.length}</div>
+              <div className="rounded-md border border-shell-700 bg-white p-2 text-signal-slate">Audits: {auditRecords.length}</div>
+              <div className="rounded-md border border-shell-700 bg-white p-2 text-signal-slate">Party: {aliasOf(party)}</div>
+            </div>
+          </article>
         </div>
       </div>
 
       <div className="rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Timeline Replay Mode</p>
+            <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Lifecycle Snapshot</p>
             <h4 className="mt-1 text-lg font-semibold text-shell-950">
               {currentReplayStage ? `${currentReplayStage.label} Stage` : "Lifecycle"}
             </h4>
-            <p className="mt-1 text-xs text-signal-slate">Intent -&gt; Discovery -&gt; Negotiation -&gt; Approval -&gt; Settlement</p>
+            <p className="mt-1 text-xs text-signal-slate">Manual navigation only: Intent -&gt; Discovery -&gt; Negotiation -&gt; Approval -&gt; Settlement</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -812,12 +958,6 @@ export function FlowView({
               onClick={() => setReplayIndex((prev) => (prev === 0 ? replayStages.length - 1 : prev - 1))}
             >
               Prev
-            </button>
-            <button
-              className="rounded-md bg-shell-950 px-3 py-1.5 text-xs font-semibold text-white"
-              onClick={() => setReplayPlaying((prev) => !prev)}
-            >
-              {replayPlaying ? "Pause" : "Play"}
             </button>
             <button
               className="rounded-md border border-shell-700 bg-white px-3 py-1.5 text-xs font-semibold text-signal-slate"
@@ -832,13 +972,14 @@ export function FlowView({
           {replayStages.map((stage, index) => {
             const active = index === replayIndex;
             return (
-              <article
+              <button
                 key={stage.label}
-                className={`rounded-lg border p-3 transition ${
+                className={`rounded-lg border p-3 text-left transition ${
                   active
                     ? "border-shell-950 bg-shell-900/5 shadow-[0_8px_24px_rgba(36,56,99,0.12)]"
                     : "border-shell-700 bg-white/85"
                 }`}
+                onClick={() => setReplayIndex(index)}
               >
                 <p className="text-xs uppercase tracking-[0.16em] text-signal-slate">{stage.label}</p>
                 <p className={`mt-1 text-2xl font-semibold ${stage.accent}`}>{stage.count}</p>
@@ -849,7 +990,7 @@ export function FlowView({
                     </span>
                   ))}
                 </div>
-              </article>
+              </button>
             );
           })}
         </div>
@@ -894,270 +1035,6 @@ export function FlowView({
               ))}
             </tbody>
           </table>
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
-          <h4 className="text-lg font-semibold text-signal-mint">Manual Order Entry</h4>
-          <p className="mt-1 text-xs text-signal-slate">Inject new intents and blind discovery signals live.</p>
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <label className="text-xs text-signal-slate">
-              Submit As
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={orderActor}
-                onChange={(event) => setOrderActor(event.target.value)}
-              >
-                {executableParties.map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs text-signal-slate">
-              Instrument
-              <input
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={instrument}
-                onChange={(event) => setInstrument(event.target.value)}
-              />
-            </label>
-            <label className="text-xs text-signal-slate">
-              Quantity
-              <input
-                type="number"
-                min="1"
-                step="1"
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={quantity}
-                onChange={(event) => setQuantity(event.target.value)}
-              />
-            </label>
-            <label className="text-xs text-signal-slate">
-              Min Price (Intent)
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={minPrice}
-                onChange={(event) => setMinPrice(event.target.value)}
-              />
-            </label>
-            <label className="text-xs text-signal-slate">
-              Discovery Side
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={discoverySide}
-                onChange={(event) => setDiscoverySide(event.target.value as "Buy" | "Sell")}
-              >
-                <option value="Buy">Buy</option>
-                <option value="Sell">Sell</option>
-              </select>
-            </label>
-            <label className="text-xs text-signal-slate">
-              Strategy Tag
-              <input
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={strategyTag}
-                onChange={(event) => setStrategyTag(event.target.value)}
-              />
-            </label>
-          </div>
-          <label className="mt-3 block text-xs text-signal-slate">
-            Discoverable By (comma-separated parties)
-            <input
-              className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-              value={discoverableByCsv}
-              onChange={(event) => setDiscoverableByCsv(event.target.value)}
-            />
-          </label>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              className="rounded-md bg-signal-mint px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
-              disabled={busy}
-              onClick={() => void createTradeIntent()}
-            >
-              Create Sell TradeIntent
-            </button>
-            <button
-              className="rounded-md bg-signal-amber px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
-              disabled={busy}
-              onClick={() => void createDiscoveryInterest()}
-            >
-              Post DiscoveryInterest
-            </button>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
-          <h4 className="text-lg font-semibold text-signal-amber">Negotiation + Settlement Controls</h4>
-          <p className="mt-1 text-xs text-signal-slate">Drive commit/reveal and settlement choices manually.</p>
-
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <label className="text-xs text-signal-slate">
-              Negotiation Actor
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={negotiationActor}
-                onChange={(event) => setNegotiationActor(event.target.value)}
-              >
-                {executableParties.map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-xs text-signal-slate">
-              Negotiation Choice
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={negotiationChoice}
-                onChange={(event) => setNegotiationChoice(event.target.value as NegotiationChoice)}
-              >
-                <option value="SubmitSellerTerms">SubmitSellerTerms</option>
-                <option value="SubmitBuyerTerms">SubmitBuyerTerms</option>
-                <option value="CommitTerms">CommitTerms</option>
-                <option value="RevealTerms">RevealTerms</option>
-                <option value="AcceptBySeller">AcceptBySeller</option>
-                <option value="AcceptByBuyer">AcceptByBuyer</option>
-                <option value="ApproveMatch">ApproveMatch</option>
-                <option value="StartSettlement">StartSettlement</option>
-              </select>
-            </label>
-            <label className="text-xs text-signal-slate md:col-span-2">
-              Negotiation Contract
-              <input
-                list="negotiation-cids"
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={negotiationCid}
-                onChange={(event) => setNegotiationCid(event.target.value)}
-              />
-              <datalist id="negotiation-cids">
-                {negotiations.map((item) => (
-                  <option key={item.contractId} value={item.contractId} />
-                ))}
-              </datalist>
-            </label>
-            <label className="text-xs text-signal-slate">
-              Qty (submit choices)
-              <input
-                type="number"
-                step="1"
-                min="1"
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={negotiationQty}
-                onChange={(event) => setNegotiationQty(event.target.value)}
-              />
-            </label>
-            <label className="text-xs text-signal-slate">
-              Price (submit choices)
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={negotiationPrice}
-                onChange={(event) => setNegotiationPrice(event.target.value)}
-              />
-            </label>
-            <label className="text-xs text-signal-slate">
-              Side (commit/reveal)
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={negotiationSide}
-                onChange={(event) => setNegotiationSide(event.target.value as "Buy" | "Sell")}
-              >
-                <option value="Sell">Sell</option>
-                <option value="Buy">Buy</option>
-              </select>
-            </label>
-            <label className="text-xs text-signal-slate">
-              Salt (commit/reveal)
-              <input
-                className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                value={negotiationSalt}
-                onChange={(event) => setNegotiationSalt(event.target.value)}
-              />
-            </label>
-          </div>
-          <button
-            className="mt-3 rounded-md bg-signal-amber px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
-            disabled={busy}
-            onClick={() => void executeNegotiationChoice()}
-          >
-            Execute Negotiation Choice
-          </button>
-
-          <div className="mt-4 border-t border-shell-700 pt-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="text-xs text-signal-slate">
-                Settlement Actor
-                <select
-                  className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                  value={settlementActor}
-                  onChange={(event) => setSettlementActor(event.target.value)}
-                >
-                  {executableParties.map((entry) => (
-                    <option key={entry} value={entry}>
-                      {entry}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-xs text-signal-slate">
-                Settlement Choice
-                <select
-                  className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                  value={settlementChoice}
-                  onChange={(event) => setSettlementChoice(event.target.value as SettlementChoice)}
-                >
-                  <option value="SimpleFinalizeSettlement">SimpleFinalizeSettlement</option>
-                  <option value="FinalizeSettlement">FinalizeSettlement</option>
-                </select>
-              </label>
-              <label className="text-xs text-signal-slate md:col-span-2">
-                Settlement Contract
-                <input
-                  list="settlement-cids"
-                  className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                  value={settlementCid}
-                  onChange={(event) => setSettlementCid(event.target.value)}
-                />
-                <datalist id="settlement-cids">
-                  {settlements.map((item) => (
-                    <option key={item.contractId} value={item.contractId} />
-                  ))}
-                </datalist>
-              </label>
-              <label className="text-xs text-signal-slate">
-                Seller Asset CID
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                  value={sellerAssetCid}
-                  onChange={(event) => setSellerAssetCid(event.target.value)}
-                />
-              </label>
-              <label className="text-xs text-signal-slate">
-                Buyer Cash CID
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 bg-white px-2 py-2 text-shell-950"
-                  value={buyerCashCid}
-                  onChange={(event) => setBuyerCashCid(event.target.value)}
-                />
-              </label>
-            </div>
-            <button
-              className="mt-3 rounded-md bg-signal-coral px-3 py-2 text-sm font-semibold text-shell-950 disabled:opacity-50"
-              disabled={busy}
-              onClick={() => void executeSettlementChoice()}
-            >
-              Execute Settlement Choice
-            </button>
-          </div>
         </div>
       </div>
 
@@ -1252,15 +1129,6 @@ export function FlowView({
           )}
         </article>
       </div>
-
-      <article className="rounded-xl border border-shell-700 bg-white/70 p-4 backdrop-blur-xl">
-        <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-signal-slate">Action Output</h4>
-        {statusMessage ? <p className="mt-2 text-sm text-signal-mint">{statusMessage}</p> : null}
-        {errorMessage ? <p className="mt-2 text-sm text-signal-coral">{errorMessage}</p> : null}
-        {!statusMessage && !errorMessage ? (
-          <p className="mt-2 text-sm text-signal-slate">Execute actions above to generate observable on-ledger state changes.</p>
-        ) : null}
-      </article>
     </section>
   );
 }
