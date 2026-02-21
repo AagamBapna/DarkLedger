@@ -115,7 +115,7 @@ export function ContractVisibilityInspector({
   };
 
   return (
-    <section className="space-y-4 rounded-2xl border border-shell-700 bg-white p-5">
+    <section className="app-panel panel-sheen space-y-4 rounded-2xl border border-shell-700 bg-white/80 p-5">
       <div>
         <p className="text-xs uppercase tracking-[0.2em] text-signal-slate">Visibility Inspector</p>
         <h2 className="mt-2 text-2xl font-semibold text-shell-950">Contract Visibility Inspector</h2>

@@ -6,21 +6,37 @@ export default {
     extend: {
       colors: {
         shell: {
-          950: "#10100f",
-          900: "#fbfaf8",
-          800: "#efede8",
-          700: "#ccc8bf"
+          950: "#081325",
+          900: "#f4f8fc",
+          800: "#cad8e8",
+          700: "#6f829b"
         },
         signal: {
-          mint: "#3f8d66",
-          amber: "#996f34",
-          coral: "#9f4c44",
-          slate: "#5c5a55"
+          mint: "#0f766e",
+          amber: "#b36a13",
+          coral: "#b94d3f",
+          slate: "#334155"
         }
       },
       boxShadow: {
-        pulse: "0 20px 45px rgba(16, 16, 15, 0.18)"
-      }
+        pulse: "0 18px 48px rgba(11, 26, 46, 0.2)",
+        soft: "0 20px 46px -30px rgba(11, 26, 46, 0.48)",
+        lift: "0 30px 60px -36px rgba(11, 26, 46, 0.56)"
+      },
+      keyframes: {
+        fadeRise: {
+          "0%": { opacity: "0", transform: "translateY(16px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" }
+        },
+        floatOrb: {
+          "0%, 100%": { transform: "translate3d(0, 0, 0)" },
+          "50%": { transform: "translate3d(0, -10px, 0)" }
+        }
+      },
+      animation: {
+        "fade-rise": "fadeRise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) both",
+        "float-orb": "floatOrb 12s ease-in-out infinite"
+      },
     }
   },
   plugins: []

@@ -441,7 +441,7 @@ export function PrivacyChallengeMode({
   const hiddenRoles = proof ? proof.results.filter((row) => !row.visible).map((row) => row.role) : [];
 
   return (
-    <section className="mt-6 rounded-2xl border border-shell-700 bg-white p-5">
+    <section className="app-panel panel-sheen mt-6 rounded-2xl border border-shell-700 bg-white/80 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-signal-slate">Privacy Challenge Mode</p>

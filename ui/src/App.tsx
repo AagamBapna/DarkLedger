@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartyContext } from "./context/PartyContext";
 import { ContractVisibilityInspector } from "./views/ContractVisibilityInspector";
+import { DarkAuctionView } from "./views/DarkAuctionView";
+import { LandingPage } from "./views/LandingPage";
 import { PrivacyChallengeMode } from "./views/PrivacyChallengeMode";
 import {
   TEMPLATE_IDS,
@@ -20,7 +22,7 @@ import type {
   TradeSettlementPayload,
 } from "./types/contracts";
 
-type RoleView = "Seller" | "Buyer" | "Outsider" | "Inspector" | "Challenge";
+type RoleView = "Landing" | "DarkAuction" | "Seller" | "Buyer" | "Outsider" | "Inspector" | "Challenge";
 
 type SellerChoice =
   | "SubmitSellerTerms"
@@ -79,8 +81,8 @@ function optionalText(value: string | null | { tag: "Some" | "None"; value?: str
 
 function statusPillClass(active: boolean): string {
   return active
-    ? "bg-shell-950 text-shell-900"
-    : "border border-shell-700 bg-white text-signal-slate";
+    ? "border border-signal-mint/40 bg-shell-950 text-shell-900 shadow-soft"
+    : "border border-shell-700/70 bg-white/75 text-signal-slate hover:border-signal-mint/40 hover:text-shell-950";
 }
 
 function isValidPositiveNumber(value: string): boolean {
@@ -224,7 +226,7 @@ interface OutsiderAcceptedSignal {
 export default function App() {
   const { availableParties } = usePartyContext();
 
-  const [view, setView] = useState<RoleView>("Seller");
+  const [view, setView] = useState<RoleView>("Landing");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -284,7 +286,6 @@ export default function App() {
     [companyNegotiations],
   );
   const completedTotalDisplay = acceptedForOutsider.length;
-  const newAcceptedSinceLoad = detectedCompletions.length;
   const outsiderAcceptedSignals = useMemo<OutsiderAcceptedSignal[]>(() => {
     const seen = new Set<string>();
     const signals: OutsiderAcceptedSignal[] = [];
@@ -874,18 +875,20 @@ export default function App() {
     : false;
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8 md:px-8">
-      <section className="rounded-2xl border border-shell-700 bg-white p-6 shadow-sm">
+    <main className="app-shell mx-auto max-w-7xl px-4 py-8 md:px-8 lg:py-10">
+      <section className="app-panel panel-sheen relative overflow-hidden rounded-[1.75rem] border border-shell-700 bg-white/80 p-6 shadow-soft">
+        <div className="pointer-events-none absolute -right-12 -top-14 h-40 w-40 rounded-full bg-signal-mint/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-16 bottom-0 h-36 w-36 rounded-full bg-[#46a8c9]/20 blur-3xl" />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-signal-slate">Agentic Shadow Cap</p>
-            <h1 className="mt-1 text-3xl font-bold text-shell-950">Trade Console</h1>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-signal-slate">DarkLedger</p>
+            <h1 className="mt-1 text-3xl font-bold text-shell-950">Private Trading Console</h1>
             <p className="mt-2 text-sm text-signal-slate">
-              Focused workflow: Seller creates intents, Buyer/Seller negotiate, Outsider sees only public outcome signals.
+              Confidential negotiation flow with selective visibility, issuer control, and auditable settlement outcomes.
             </p>
           </div>
           <button
-            className="rounded-lg border border-shell-700 px-3 py-2 text-sm font-semibold text-shell-950"
+            className="rounded-xl border border-shell-700/75 bg-white/75 px-3 py-2 text-sm font-semibold text-shell-950 shadow-soft"
             onClick={() => void refreshLedger()}
             disabled={busy || loading}
           >
@@ -894,13 +897,17 @@ export default function App() {
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          {(["Seller", "Buyer", "Outsider", "Inspector", "Challenge"] as RoleView[]).map((role) => (
+          {(["Landing", "DarkAuction", "Seller", "Buyer", "Outsider", "Inspector", "Challenge"] as RoleView[]).map((role) => (
             <button
               key={role}
               className={`rounded-full px-4 py-2 text-sm font-semibold ${statusPillClass(view === role)}`}
               onClick={() => setView(role)}
             >
-              {role} View
+              {role === "Landing"
+                ? "Home"
+                : role === "DarkAuction"
+                  ? "Dark Auction"
+                  : `${role} View`}
             </button>
           ))}
         </div>
@@ -910,8 +917,18 @@ export default function App() {
         {loading ? <p className="mt-4 text-sm text-signal-slate">Refreshing ledger data...</p> : null}
       </section>
 
+      {view === "Landing" ? (
+        <LandingPage
+          onOpenConsole={() => setView("Seller")}
+          onOpenInspector={() => setView("Inspector")}
+          onOpenDarkAuction={() => setView("DarkAuction")}
+        />
+      ) : null}
+
+      {view === "DarkAuction" ? <DarkAuctionView /> : null}
+
       {view === "Seller" ? (
-        <section className="mt-6 grid gap-6 lg:grid-cols-2">
+        <section className="mt-6 grid animate-fade-rise gap-6 lg:grid-cols-2">
           <article className="rounded-2xl border border-shell-700 bg-white p-5">
             <h2 className="text-xl font-semibold text-shell-950">Create Trade Intent</h2>
             <p className="mt-1 text-sm text-signal-slate">Seller creates intents. This is the only creation form in this UI.</p>
@@ -1091,7 +1108,7 @@ export default function App() {
       ) : null}
 
       {view === "Buyer" ? (
-        <section className="mt-6 grid gap-6 lg:grid-cols-2">
+        <section className="mt-6 grid animate-fade-rise gap-6 lg:grid-cols-2">
           <article className="rounded-2xl border border-shell-700 bg-white p-5 lg:col-span-2">
             <h2 className="text-xl font-semibold text-shell-950">All Trade Intents</h2>
             <p className="mt-1 text-sm text-signal-slate">
@@ -1241,18 +1258,14 @@ export default function App() {
       ) : null}
 
       {view === "Outsider" ? (
-        <section className="mt-6">
+        <section className="mt-6 animate-fade-rise">
           <article className="rounded-2xl border border-shell-700 bg-white p-5">
             <h2 className="text-xl font-semibold text-shell-950">Outsider Outcome Signal</h2>
             <p className="mt-1 text-sm text-signal-slate">Auto-refreshes every 2 seconds while this view is open.</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="mt-4 grid gap-3 sm:grid-cols-1">
               <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
                 <div className="text-xs uppercase tracking-[0.12em]">Completed (Total)</div>
                 <div className="mt-1 text-2xl font-semibold text-shell-950">{completedTotalDisplay}</div>
-              </div>
-              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-                <div className="text-xs uppercase tracking-[0.12em]">New Since View Open</div>
-                <div className="mt-1 text-2xl font-semibold text-shell-950">{newAcceptedSinceLoad}</div>
               </div>
             </div>
 
@@ -1328,7 +1341,7 @@ export default function App() {
       ) : null}
 
       {view === "Inspector" ? (
-        <section className="mt-6">
+        <section className="mt-6 animate-fade-rise">
           <ContractVisibilityInspector
             availableParties={availableParties}
             activeParty={view}
