@@ -56,6 +56,15 @@ jobs:
           command -v dpm
           dpm --version
 
+      - name: Install required Daml SDK
+        run: |
+          SDK_VERSION="$(sed -n 's/^sdk-version:[[:space:]]*//p' daml/daml.yaml | head -n 1)"
+          if [ -z "$SDK_VERSION" ]; then
+            echo "Failed to determine sdk-version from daml/daml.yaml"
+            exit 1
+          fi
+          dpm install "$SDK_VERSION"
+
       - name: Build and test Daml package
         run: |
           make dpm-build
