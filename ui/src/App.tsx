@@ -111,6 +111,18 @@ function negotiationScore(payload: PrivateNegotiationPayload): number {
   return score;
 }
 
+function isFullyAccepted(payload: PrivateNegotiationPayload): boolean {
+  return payload.sellerAccepted && payload.buyerAccepted;
+}
+
+function isAcceptedByEither(payload: PrivateNegotiationPayload): boolean {
+  return payload.sellerAccepted || payload.buyerAccepted;
+}
+
+function hasSubmittedTerms(payload: PrivateNegotiationPayload): boolean {
+  return optionalToNumber(payload.proposedQty) !== null && optionalToNumber(payload.proposedUnitPrice) !== null;
+}
+
 function collapseNegotiationLanes(
   rows: Array<ContractRecord<PrivateNegotiationPayload>>,
 ): Array<ContractRecord<PrivateNegotiationPayload>> {
@@ -143,10 +155,12 @@ export default function App() {
   const [tradeIntents, setTradeIntents] = useState<Array<ContractRecord<TradeIntentPayload>>>([]);
   const [sellerNegotiations, setSellerNegotiations] = useState<Array<ContractRecord<PrivateNegotiationPayload>>>([]);
   const [buyerNegotiations, setBuyerNegotiations] = useState<Array<ContractRecord<PrivateNegotiationPayload>>>([]);
+  const [companyNegotiations, setCompanyNegotiations] = useState<Array<ContractRecord<PrivateNegotiationPayload>>>([]);
   const [outsiderIntents, setOutsiderIntents] = useState<Array<ContractRecord<TradeIntentPayload>>>([]);
   const [outsiderNegotiations, setOutsiderNegotiations] = useState<Array<ContractRecord<PrivateNegotiationPayload>>>([]);
   const [outsiderSettlements, setOutsiderSettlements] = useState<Array<ContractRecord<TradeSettlementPayload>>>([]);
   const [outsiderAudits, setOutsiderAudits] = useState<Array<ContractRecord<TradeAuditRecordPayload>>>([]);
+  const outsiderAcceptedBaselineRef = useRef<number | null>(null);
 
   const seller = useMemo(() => resolveAlias(availableParties, "Seller"), [availableParties]);
   const sellerAgent = useMemo(() => resolveAlias(availableParties, "SellerAgent"), [availableParties]);
@@ -171,14 +185,24 @@ export default function App() {
   const startupResetDone = useRef(false);
 
   const sellerNegotiationsForSelection = useMemo(
-    () => collapseNegotiationLanes(sellerNegotiations),
+    () => collapseNegotiationLanes(sellerNegotiations.filter((row) => !isAcceptedByEither(row.payload))),
     [sellerNegotiations],
   );
 
   const buyerNegotiationsCollapsed = useMemo(
-    () => collapseNegotiationLanes(buyerNegotiations),
+    () => collapseNegotiationLanes(buyerNegotiations.filter((row) => !isAcceptedByEither(row.payload))),
     [buyerNegotiations],
   );
+
+  const acceptedForOutsider = useMemo(
+    () => collapseNegotiationLanes(companyNegotiations).filter((row) => isAcceptedByEither(row.payload)),
+    [companyNegotiations],
+  );
+  const newAcceptedSinceLoad = useMemo(() => {
+    const baseline = outsiderAcceptedBaselineRef.current;
+    if (baseline === null) return 0;
+    return Math.max(0, acceptedForOutsider.length - baseline);
+  }, [acceptedForOutsider.length]);
 
   const selectedSellerNegotiation = useMemo(
     () => sellerNegotiationsForSelection.find((row) => row.contractId === sellerNegotiationCid)
@@ -232,10 +256,11 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [intents, sellerNeg, buyerNeg, outIntents, outNeg, outSettle, outAudit] = await Promise.all([
+      const [intents, sellerNeg, buyerNeg, companyNeg, outIntents, outNeg, outSettle, outAudit] = await Promise.all([
         queryTradeIntents(seller),
         queryPrivateNegotiations(sellerAgent),
         queryPrivateNegotiations(buyerAgent),
+        queryPrivateNegotiations(company),
         queryTradeIntents(outsider),
         queryPrivateNegotiations(outsider),
         queryTradeSettlements(outsider),
@@ -245,6 +270,12 @@ export default function App() {
       setTradeIntents(intents);
       setSellerNegotiations(sellerNeg);
       setBuyerNegotiations(buyerNeg);
+      setCompanyNegotiations(companyNeg);
+      if (outsiderAcceptedBaselineRef.current === null) {
+        outsiderAcceptedBaselineRef.current = collapseNegotiationLanes(companyNeg)
+          .filter((row) => isAcceptedByEither(row.payload))
+          .length;
+      }
       setOutsiderIntents(outIntents);
       setOutsiderNegotiations(outNeg);
       setOutsiderSettlements(outSettle);
@@ -255,7 +286,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [buyerAgent, outsider, seller, sellerAgent]);
+  }, [buyerAgent, company, outsider, seller, sellerAgent]);
 
   useEffect(() => {
     if (startupResetDone.current) {
@@ -429,6 +460,21 @@ export default function App() {
     selectedBuyerNegotiation,
   ]);
 
+  const runBuyerNegotiate = useCallback(async () => {
+    await runBuyerAction("SubmitBuyerTerms");
+  }, [runBuyerAction]);
+
+  const runBuyerAcceptOffer = useCallback(async () => {
+    if (!selectedBuyerNegotiation) {
+      setError("No buyer-side negotiation contract available yet.");
+      return;
+    }
+    if (!hasSubmittedTerms(selectedBuyerNegotiation.payload)) {
+      await runBuyerAction("SubmitBuyerTerms");
+    }
+    await runBuyerAction("AcceptByBuyer");
+  }, [runBuyerAction, selectedBuyerNegotiation]);
+
   const runBuyerNegotiateFromIntent = useCallback(async (intent: ContractRecord<TradeIntentPayload>) => {
     const qty = optionalToNumber(intent.payload.quantity);
     const price = optionalToNumber(intent.payload.minPrice);
@@ -445,34 +491,73 @@ export default function App() {
     await runAction(`Negotiation setup for ${intent.payload.instrument}.`, async () => {
       const liveRows = await queryPrivateNegotiations(buyerAgent);
       setBuyerNegotiations(liveRows);
-      const match = liveRows.find(
-        (row) => normalizeInstrument(row.payload.instrument) === normalizeInstrument(intent.payload.instrument),
+      const normalizedInstrument = normalizeInstrument(intent.payload.instrument);
+      const activeRows = liveRows.filter((row) => !isAcceptedByEither(row.payload));
+      const match = activeRows.find(
+        (row) => normalizeInstrument(row.payload.instrument) === normalizedInstrument,
       ) ?? null;
 
       if (!match) {
+        const createdAt = new Date().toISOString();
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-        const created = await createContract<PrivateNegotiationPayload>(
-          company,
-          TEMPLATE_IDS.privateNegotiation,
-          {
-            issuer: company,
-            seller,
-            sellerAgent,
-            buyer,
-            buyerAgent,
-            instrument: intent.payload.instrument,
-            proposedQty: null,
-            proposedUnitPrice: null,
-            sellerAccepted: false,
-            buyerAccepted: false,
-            issuerApproved: false,
-            expiresAt,
-            sellerCommitmentHash: null,
-            buyerCommitmentHash: null,
-            sellerTermsRevealed: false,
-            buyerTermsRevealed: false,
-          },
-        );
+        const payload: Record<string, unknown> = {
+          issuer: company,
+          seller,
+          sellerAgent,
+          buyer,
+          buyerAgent,
+          sellerJurisdiction: "US",
+          buyerJurisdiction: "US",
+          instrument: intent.payload.instrument,
+          proposedQty: null,
+          proposedUnitPrice: null,
+          sellerAccepted: false,
+          buyerAccepted: false,
+          issuerApproved: false,
+          createdAt,
+          expiresAt,
+          sellerCommitmentHash: null,
+          buyerCommitmentHash: null,
+          sellerTermsRevealed: false,
+          buyerTermsRevealed: false,
+        };
+
+        const defaultForMissingField = (field: string): unknown => {
+          if (field === "createdAt") return createdAt;
+          if (field === "expiresAt") return expiresAt;
+          if (field === "sellerJurisdiction" || field === "buyerJurisdiction") return "US";
+          return "";
+        };
+
+        let created: ContractRecord<PrivateNegotiationPayload> | null = null;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          try {
+            created = await createContract<PrivateNegotiationPayload>(
+              company,
+              TEMPLATE_IDS.privateNegotiation,
+              payload,
+            );
+            break;
+          } catch (reason) {
+            const message = reason instanceof Error ? reason.message : String(reason);
+            const missingMatch = message.match(/Missing non-optional field:\s*([A-Za-z0-9_]+)/);
+            if (missingMatch) {
+              const field = missingMatch[1];
+              payload[field] = defaultForMissingField(field);
+              continue;
+            }
+            const unknownMatch = message.match(/Unknown field:\s*([A-Za-z0-9_]+)/);
+            if (unknownMatch) {
+              const field = unknownMatch[1];
+              delete payload[field];
+              continue;
+            }
+            throw reason;
+          }
+        }
+        if (!created) {
+          throw new Error("Could not create negotiation: payload schema mismatch across package versions.");
+        }
 
         setSelectedIntentInstrument(intent.payload.instrument);
         setBuyerNegotiationCid(created.contractId);
@@ -495,6 +580,8 @@ export default function App() {
     if (qty === null || price === null) return "No price/qty terms submitted yet.";
     return `Qty ${qty} @ ${price}`;
   };
+  const sellerCanAccept = selectedSellerNegotiation ? hasSubmittedTerms(selectedSellerNegotiation.payload) : false;
+  const buyerCanAccept = Boolean(selectedBuyerNegotiation);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 md:px-8">
@@ -681,18 +768,11 @@ export default function App() {
               </div>
             ) : null}
 
-            <button
-              className="mt-4 w-full rounded-md bg-shell-950 px-4 py-2 text-sm font-semibold text-shell-900"
-              onClick={() => void runSellerAction()}
-              disabled={busy || !selectedSellerNegotiation}
-            >
-              Execute Seller Action
-            </button>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <button
                 className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
                 onClick={() => void runSellerAction("AcceptBySeller")}
-                disabled={busy || !selectedSellerNegotiation}
+                disabled={busy || !selectedSellerNegotiation || !sellerCanAccept}
               >
                 Accept Offer
               </button>
@@ -787,82 +867,34 @@ export default function App() {
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                Buyer Action
-                <select
+                Qty
+                <input
                   className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                  value={buyerChoice}
-                  onChange={(event) => setBuyerChoice(event.target.value as BuyerChoice)}
-                >
-                  <option value="SubmitBuyerTerms">SubmitBuyerTerms</option>
-                  <option value="CommitTerms">CommitTerms</option>
-                  <option value="RevealTerms">RevealTerms</option>
-                  <option value="AcceptByBuyer">AcceptByBuyer</option>
-                  <option value="RejectByBuyer">RejectByBuyer</option>
-                </select>
+                  value={negotiationQty}
+                  onChange={(event) => setNegotiationQty(event.target.value)}
+                />
               </label>
-
-              {showBuyerFields ? (
-                <>
-                  <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                    Qty
-                    <input
-                      className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                      value={negotiationQty}
-                      onChange={(event) => setNegotiationQty(event.target.value)}
-                    />
-                  </label>
-                  <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                    Unit Price
-                    <input
-                      className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                      value={negotiationPrice}
-                      onChange={(event) => setNegotiationPrice(event.target.value)}
-                    />
-                  </label>
-                  <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                    Side
-                    <select
-                      className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                      value={negotiationSide}
-                      onChange={(event) => setNegotiationSide(event.target.value as "Buy" | "Sell")}
-                    >
-                      <option value="Buy">Buy</option>
-                      <option value="Sell">Sell</option>
-                    </select>
-                  </label>
-                  <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                    Salt
-                    <input
-                      className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                      value={negotiationSalt}
-                      onChange={(event) => setNegotiationSalt(event.target.value)}
-                    />
-                  </label>
-                </>
-              ) : null}
+              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
+                Unit Price
+                <input
+                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
+                  value={negotiationPrice}
+                  onChange={(event) => setNegotiationPrice(event.target.value)}
+                />
+              </label>
             </div>
 
-            <button
-              className="mt-4 w-full rounded-md bg-shell-950 px-4 py-2 text-sm font-semibold text-shell-900"
-              onClick={() => void runBuyerAction()}
-              disabled={busy || !selectedBuyerNegotiation}
-            >
-              Execute Buyer Action
-            </button>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <button
                 className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => void runBuyerAction("AcceptByBuyer")}
-                disabled={busy || !selectedBuyerNegotiation}
+                onClick={() => void runBuyerAcceptOffer()}
+                disabled={busy || !selectedBuyerNegotiation || !buyerCanAccept}
               >
                 Accept Offer
               </button>
               <button
                 className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => {
-                  setBuyerChoice("SubmitBuyerTerms");
-                  void runBuyerAction("SubmitBuyerTerms");
-                }}
+                onClick={() => void runBuyerNegotiate()}
                 disabled={busy || !selectedBuyerNegotiation}
               >
                 Negotiate
@@ -893,17 +925,49 @@ export default function App() {
           <article className="rounded-2xl border border-shell-700 bg-white p-5">
             <h2 className="text-xl font-semibold text-shell-950">Joint Outcome Signal</h2>
             <p className="mt-1 text-sm text-signal-slate">
-              After both sides complete workflow, outsider may only see public confirmation artifacts, not terms.
+              Outsider sees summary outcome signals only, never private terms.
             </p>
 
-            <div className="mt-4 rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-              <div>Public settlements visible: {outsiderSettlements.length}</div>
-              <div>Public audit records visible: {outsiderAudits.length}</div>
-              <div className="mt-2 font-semibold text-shell-950">
-                {outsiderPublicCount > 0 ? "A completed deal signal is visible." : "No public completion signal yet."}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
+                <div className="text-xs uppercase tracking-[0.12em]">Accepted (Total)</div>
+                <div className="mt-1 text-2xl font-semibold text-shell-950">{acceptedForOutsider.length}</div>
+              </div>
+              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
+                <div className="text-xs uppercase tracking-[0.12em]">New Since Load</div>
+                <div className="mt-1 text-2xl font-semibold text-shell-950">{newAcceptedSinceLoad}</div>
+              </div>
+              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
+                <div className="text-xs uppercase tracking-[0.12em]">Public Settlements</div>
+                <div className="mt-1 text-2xl font-semibold text-shell-950">{outsiderSettlements.length}</div>
+              </div>
+              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
+                <div className="text-xs uppercase tracking-[0.12em]">Public Audits</div>
+                <div className="mt-1 text-2xl font-semibold text-shell-950">{outsiderAudits.length}</div>
               </div>
             </div>
 
+            <div className="mt-3 rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
+              <div className="font-semibold text-shell-950">
+                {newAcceptedSinceLoad > 0
+                  ? "New acceptance detected in this session."
+                  : acceptedForOutsider.length > 0
+                    ? "Only historical accepted negotiations detected."
+                    : outsiderPublicCount > 0
+                      ? "Public completion artifact detected."
+                      : "No outcome signal yet."}
+              </div>
+              <div className="mt-1 text-xs">
+                Total includes historical ledger state; "New Since Load" tracks only this browser session.
+              </div>
+            </div>
+
+            {acceptedForOutsider.slice(0, 3).map((row) => (
+              <div key={row.contractId} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
+                <div className="font-semibold text-shell-950">Accepted {shortId(row.contractId)}</div>
+                <div>{row.payload.instrument}</div>
+              </div>
+            ))}
             {outsiderSettlements.slice(0, 3).map((row) => (
               <div key={row.contractId} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
                 <div className="font-semibold text-shell-950">Settlement {shortId(row.contractId)}</div>
