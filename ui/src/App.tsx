@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartyContext } from "./context/PartyContext";
 import { ContractVisibilityInspector } from "./views/ContractVisibilityInspector";
+import { PrivacyChallengeMode } from "./views/PrivacyChallengeMode";
 import {
   TEMPLATE_IDS,
   createContract,
@@ -19,7 +20,7 @@ import type {
   TradeSettlementPayload,
 } from "./types/contracts";
 
-type RoleView = "Seller" | "Buyer" | "Outsider" | "Inspector";
+type RoleView = "Seller" | "Buyer" | "Outsider" | "Inspector" | "Challenge";
 
 type SellerChoice =
   | "SubmitSellerTerms"
@@ -101,6 +102,14 @@ function parsePositiveDecimal(value: string): string | null {
 function isLockedContractError(message: string): boolean {
   const lower = message.toLowerCase();
   return lower.includes("local_verdict_locked_contracts") || lower.includes("locked contracts");
+}
+
+function normalizeLedgerError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("cannot accept before terms exist")) {
+    return "Cannot accept yet. Submit terms first using Negotiate.";
+  }
+  return message;
 }
 
 const NEGOTIATION_FIELD_CHOICES = ["SubmitSellerTerms", "SubmitBuyerTerms", "CommitTerms", "RevealTerms"];
@@ -203,6 +212,15 @@ interface DetectedCompletion {
   detectedAt: string;
 }
 
+interface OutsiderAcceptedSignal {
+  contractId: string;
+  instrument: string;
+  quantity: number | null;
+  unitPrice: number | null;
+  detectedAt: string;
+  source: "Live Detection" | "Ledger Snapshot";
+}
+
 export default function App() {
   const { availableParties } = usePartyContext();
 
@@ -223,6 +241,7 @@ export default function App() {
   const [detectedCompletions, setDetectedCompletions] = useState<DetectedCompletion[]>([]);
   const seenAcceptedCidsRef = useRef<Set<string>>(new Set());
   const outsiderDetectionInitializedRef = useRef(false);
+  const outsiderViewPrimedRef = useRef(false);
 
   const seller = useMemo(() => resolveAlias(availableParties, "Seller"), [availableParties]);
   const sellerAgent = useMemo(() => resolveAlias(availableParties, "SellerAgent"), [availableParties]);
@@ -239,6 +258,8 @@ export default function App() {
   const [buyerChoice, setBuyerChoice] = useState<BuyerChoice>("SubmitBuyerTerms");
   const [sellerNegotiationCid, setSellerNegotiationCid] = useState("");
   const [buyerNegotiationCid, setBuyerNegotiationCid] = useState("");
+  const [sellerLastGeneratedCid, setSellerLastGeneratedCid] = useState<string | null>(null);
+  const [buyerLastGeneratedCid, setBuyerLastGeneratedCid] = useState<string | null>(null);
   const [selectedIntentInstrument, setSelectedIntentInstrument] = useState<string | null>(null);
   const [negotiationQty, setNegotiationQty] = useState("1000");
   const [negotiationPrice, setNegotiationPrice] = useState("99");
@@ -264,6 +285,45 @@ export default function App() {
   );
   const completedTotalDisplay = acceptedForOutsider.length;
   const newAcceptedSinceLoad = detectedCompletions.length;
+  const outsiderAcceptedSignals = useMemo<OutsiderAcceptedSignal[]>(() => {
+    const seen = new Set<string>();
+    const signals: OutsiderAcceptedSignal[] = [];
+
+    for (const row of detectedCompletions) {
+      if (seen.has(row.contractId)) continue;
+      seen.add(row.contractId);
+      signals.push({
+        contractId: row.contractId,
+        instrument: row.instrument,
+        quantity: row.quantity,
+        unitPrice: row.unitPrice,
+        detectedAt: row.detectedAt,
+        source: "Live Detection",
+      });
+    }
+
+    for (const row of acceptedForOutsider) {
+      if (seen.has(row.contractId)) continue;
+      seen.add(row.contractId);
+      signals.push({
+        contractId: row.contractId,
+        instrument: row.payload.instrument,
+        quantity: optionalToNumber(row.payload.proposedQty),
+        unitPrice: optionalToNumber(row.payload.proposedUnitPrice),
+        detectedAt: row.payload.expiresAt,
+        source: "Ledger Snapshot",
+      });
+    }
+
+    return signals
+      .sort((left, right) => {
+        const leftPriority = left.source === "Live Detection" ? 0 : 1;
+        const rightPriority = right.source === "Live Detection" ? 0 : 1;
+        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+        return right.detectedAt.localeCompare(left.detectedAt);
+      })
+      .slice(0, 8);
+  }, [acceptedForOutsider, detectedCompletions]);
 
   const selectedSellerNegotiation = useMemo(
     () => sellerNegotiationsForSelection.find((row) => row.contractId === sellerNegotiationCid) ?? null,
@@ -333,7 +393,21 @@ export default function App() {
   }, [buyerAgent, company, outsider, seller, sellerAgent]);
 
   useEffect(() => {
-    if (loading) {
+    if (view === "Outsider") {
+      if (outsiderViewPrimedRef.current) {
+        return;
+      }
+      seenAcceptedCidsRef.current = new Set(acceptedForOutsider.map((row) => row.contractId));
+      outsiderDetectionInitializedRef.current = true;
+      setDetectedCompletions([]);
+      outsiderViewPrimedRef.current = true;
+      return;
+    }
+    outsiderViewPrimedRef.current = false;
+  }, [acceptedForOutsider, view]);
+
+  useEffect(() => {
+    if (view !== "Outsider" || loading) {
       return;
     }
 
@@ -362,7 +436,7 @@ export default function App() {
 
     newRows.forEach((row) => seen.add(row.contractId));
     setDetectedCompletions((prev) => [...additions, ...prev].slice(0, 20));
-  }, [acceptedForOutsider, loading]);
+  }, [acceptedForOutsider, loading, view]);
 
   useEffect(() => {
     if (startupResetDone.current) {
@@ -391,6 +465,16 @@ export default function App() {
     return () => {};
   }, [refreshLedger, seller]);
 
+  useEffect(() => {
+    if (view !== "Outsider") return;
+    const timer = window.setInterval(() => {
+      if (!busy) void refreshLedger();
+    }, 2000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [busy, refreshLedger, view]);
+
   const runAction = useCallback(async (description: string, action: () => Promise<void>): Promise<boolean> => {
     setBusy(true);
     setStatus(null);
@@ -404,7 +488,7 @@ export default function App() {
       return true;
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      setError(message);
+      setError(normalizeLedgerError(message));
       return false;
     } finally {
       setBusy(false);
@@ -537,11 +621,13 @@ export default function App() {
           const nextCid = typeof exerciseResult === "string" ? exerciseResult : "";
           if (nextCid) {
             const visible = await waitForNegotiationVisibility(sellerAgent, live.payload.instrument, nextCid);
+            const resolvedNextCid = visible ? visible.match.contractId : nextCid;
+            setSellerLastGeneratedCid(resolvedNextCid);
             if (visible) {
               setSellerNegotiations(visible.rows);
-              setSellerNegotiationCid(visible.match.contractId);
+              setSellerNegotiationCid(resolvedNextCid);
             } else {
-              setSellerNegotiationCid(nextCid);
+              setSellerNegotiationCid(resolvedNextCid);
             }
           }
           return;
@@ -608,13 +694,15 @@ export default function App() {
           const nextCid = typeof exerciseResult === "string" ? exerciseResult : "";
           if (nextCid) {
             const visible = await waitForNegotiationVisibility(buyerAgent, live.payload.instrument, nextCid);
+            const resolvedNextCid = visible ? visible.match.contractId : nextCid;
+            setBuyerLastGeneratedCid(resolvedNextCid);
             if (visible) {
               setBuyerNegotiations(visible.rows);
               setSelectedIntentInstrument(visible.match.payload.instrument);
-              setBuyerNegotiationCid(visible.match.contractId);
+              setBuyerNegotiationCid(resolvedNextCid);
             } else {
               setSelectedIntentInstrument(live.payload.instrument);
-              setBuyerNegotiationCid(nextCid);
+              setBuyerNegotiationCid(resolvedNextCid);
             }
           }
           return;
@@ -654,6 +742,10 @@ export default function App() {
       setError("No seller-side negotiation contract available yet.");
       return;
     }
+    if (!hasSubmittedTerms(selectedSellerNegotiation.payload)) {
+      setError("Cannot accept yet. Submit terms first using Negotiate.");
+      return;
+    }
     const accepted = await runSellerAction("AcceptBySeller");
     if (!accepted) return;
   }, [runSellerAction, selectedSellerNegotiation]);
@@ -661,6 +753,10 @@ export default function App() {
   const runBuyerAcceptOffer = useCallback(async () => {
     if (!selectedBuyerNegotiation) {
       setError("No buyer-side negotiation contract available yet.");
+      return;
+    }
+    if (!hasSubmittedTerms(selectedBuyerNegotiation.payload)) {
+      setError("Cannot accept yet. Submit terms first using Negotiate.");
       return;
     }
     const accepted = await runBuyerAction("AcceptByBuyer");
@@ -686,7 +782,7 @@ export default function App() {
       const normalizedInstrument = normalizeInstrument(intent.payload.instrument);
       const match = pickBestNegotiation(liveRows, "", normalizedInstrument);
 
-      if (!match) {
+      if (!match || !hasSubmittedTerms(match.payload)) {
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
         const payload: Record<string, unknown> = {
           issuer: company,
@@ -695,9 +791,10 @@ export default function App() {
           buyer,
           buyerAgent,
           instrument: intent.payload.instrument,
-          proposedQty: null,
-          proposedUnitPrice: null,
-          sellerAccepted: false,
+          // Seed negotiation with seller intent terms so buyer can accept directly.
+          proposedQty: qty,
+          proposedUnitPrice: price,
+          sellerAccepted: true,
           buyerAccepted: false,
           issuerApproved: false,
           expiresAt,
@@ -715,9 +812,11 @@ export default function App() {
         if (visible) {
           setBuyerNegotiations(visible.rows);
           setSelectedIntentInstrument(intent.payload.instrument);
+          setBuyerLastGeneratedCid(visible.match.contractId);
           setBuyerNegotiationCid(visible.match.contractId);
         } else {
           setSelectedIntentInstrument(intent.payload.instrument);
+          setBuyerLastGeneratedCid(created.contractId);
           setBuyerNegotiationCid(created.contractId);
         }
       } else {
@@ -740,11 +839,38 @@ export default function App() {
     if (qty === null || price === null) return "No price/qty terms submitted yet.";
     return `Qty ${qty} @ ${price}`;
   };
+
+  const copyContractId = useCallback(async (contractId: string) => {
+    try {
+      await navigator.clipboard.writeText(contractId);
+      setStatus(`Copied contract ID ${shortId(contractId)}.`);
+      setError(null);
+    } catch {
+      setError("Unable to copy contract ID. Clipboard permission may be blocked.");
+    }
+  }, []);
+
+  const suggestedIntentCid = useMemo(() => tradeIntents[0]?.contractId ?? "", [tradeIntents]);
+  const suggestedNegotiationCid = useMemo(() => {
+    return selectedSellerNegotiation?.contractId
+      ?? selectedBuyerNegotiation?.contractId
+      ?? sellerNegotiationsForSelection[0]?.contractId
+      ?? buyerNegotiationsForSelection[0]?.contractId
+      ?? companyNegotiations[0]?.contractId
+      ?? "";
+  }, [
+    buyerNegotiationsForSelection,
+    companyNegotiations,
+    selectedBuyerNegotiation,
+    selectedSellerNegotiation,
+    sellerNegotiationsForSelection,
+  ]);
+
   const sellerCanAccept = selectedSellerNegotiation
-    ? !selectedSellerNegotiation.payload.sellerAccepted
+    ? hasSubmittedTerms(selectedSellerNegotiation.payload) && !selectedSellerNegotiation.payload.sellerAccepted
     : false;
   const buyerCanAccept = selectedBuyerNegotiation
-    ? !selectedBuyerNegotiation.payload.buyerAccepted
+    ? hasSubmittedTerms(selectedBuyerNegotiation.payload) && !selectedBuyerNegotiation.payload.buyerAccepted
     : false;
 
   return (
@@ -768,7 +894,7 @@ export default function App() {
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          {(["Seller", "Buyer", "Outsider", "Inspector"] as RoleView[]).map((role) => (
+          {(["Seller", "Buyer", "Outsider", "Inspector", "Challenge"] as RoleView[]).map((role) => (
             <button
               key={role}
               className={`rounded-full px-4 py-2 text-sm font-semibold ${statusPillClass(view === role)}`}
@@ -832,7 +958,19 @@ export default function App() {
                   <div key={intent.contractId} className="rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
                     <div className="font-semibold text-shell-950">{intent.payload.instrument}</div>
                     <div>Qty {optionalToNumber(intent.payload.quantity)} | Min {optionalToNumber(intent.payload.minPrice)}</div>
-                    <div className="text-xs">CID {shortId(intent.contractId)}</div>
+                    <div className="mt-2 rounded-md border border-shell-700/60 bg-shell-900/30 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Contract ID</span>
+                        <button
+                          className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
+                          onClick={() => void copyContractId(intent.contractId)}
+                          type="button"
+                        >
+                          Copy CID
+                        </button>
+                      </div>
+                      <code className="mt-1 block break-all text-xs font-mono text-shell-950">{intent.contractId}</code>
+                    </div>
                   </div>
                 ))}
                 {tradeIntents.length === 0 ? <p className="text-sm text-signal-slate">No intents yet.</p> : null}
@@ -873,6 +1011,34 @@ export default function App() {
                 <div>
                   Buyer commit: {shortId(optionalText(selectedSellerNegotiation.payload.buyerCommitmentHash))}
                 </div>
+                <div className="mt-2 rounded-md border border-shell-700/60 bg-white/80 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Current CID</span>
+                    <button
+                      className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
+                      onClick={() => void copyContractId(selectedSellerNegotiation.contractId)}
+                      type="button"
+                    >
+                      Copy CID
+                    </button>
+                  </div>
+                  <code className="mt-1 block break-all text-xs font-mono text-shell-950">{selectedSellerNegotiation.contractId}</code>
+                </div>
+                {sellerLastGeneratedCid ? (
+                  <div className="mt-2 rounded-md border border-signal-mint/35 bg-signal-mint/10 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Last New CID</span>
+                      <button
+                        className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
+                        onClick={() => void copyContractId(sellerLastGeneratedCid)}
+                        type="button"
+                      >
+                        Copy CID
+                      </button>
+                    </div>
+                    <code className="mt-1 block break-all text-xs font-mono text-shell-950">{sellerLastGeneratedCid}</code>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="mt-3 text-sm text-signal-slate">
@@ -917,6 +1083,9 @@ export default function App() {
                 Negotiate
               </button>
             </div>
+            {selectedSellerNegotiation && !hasSubmittedTerms(selectedSellerNegotiation.payload) ? (
+              <p className="mt-2 text-xs text-signal-slate">Accept is disabled until qty and unit price terms exist.</p>
+            ) : null}
           </article>
         </section>
       ) : null}
@@ -990,6 +1159,34 @@ export default function App() {
                 <div>
                   Reveal status: seller={String(selectedBuyerNegotiation.payload.sellerTermsRevealed)} buyer={String(selectedBuyerNegotiation.payload.buyerTermsRevealed)}
                 </div>
+                <div className="mt-2 rounded-md border border-shell-700/60 bg-white/80 p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Current CID</span>
+                    <button
+                      className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
+                      onClick={() => void copyContractId(selectedBuyerNegotiation.contractId)}
+                      type="button"
+                    >
+                      Copy CID
+                    </button>
+                  </div>
+                  <code className="mt-1 block break-all text-xs font-mono text-shell-950">{selectedBuyerNegotiation.contractId}</code>
+                </div>
+                {buyerLastGeneratedCid ? (
+                  <div className="mt-2 rounded-md border border-signal-mint/35 bg-signal-mint/10 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Last New CID</span>
+                      <button
+                        className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
+                        onClick={() => void copyContractId(buyerLastGeneratedCid)}
+                        type="button"
+                      >
+                        Copy CID
+                      </button>
+                    </div>
+                    <code className="mt-1 block break-all text-xs font-mono text-shell-950">{buyerLastGeneratedCid}</code>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="mt-3 text-sm text-signal-slate">
@@ -1036,6 +1233,9 @@ export default function App() {
                 Negotiate
               </button>
             </div>
+            {selectedBuyerNegotiation && !hasSubmittedTerms(selectedBuyerNegotiation.payload) ? (
+              <p className="mt-2 text-xs text-signal-slate">Accept is disabled until qty and unit price terms exist.</p>
+            ) : null}
           </article>
         </section>
       ) : null}
@@ -1044,14 +1244,83 @@ export default function App() {
         <section className="mt-6">
           <article className="rounded-2xl border border-shell-700 bg-white p-5">
             <h2 className="text-xl font-semibold text-shell-950">Outsider Outcome Signal</h2>
+            <p className="mt-1 text-sm text-signal-slate">Auto-refreshes every 2 seconds while this view is open.</p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
                 <div className="text-xs uppercase tracking-[0.12em]">Completed (Total)</div>
                 <div className="mt-1 text-2xl font-semibold text-shell-950">{completedTotalDisplay}</div>
               </div>
               <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-                <div className="text-xs uppercase tracking-[0.12em]">New Since Load</div>
+                <div className="text-xs uppercase tracking-[0.12em]">New Since View Open</div>
                 <div className="mt-1 text-2xl font-semibold text-shell-950">{newAcceptedSinceLoad}</div>
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <p className="text-sm font-semibold text-shell-950">Live Accepted Feed</p>
+              <div className="mt-2 space-y-2">
+                {detectedCompletions.slice(0, 5).map((row) => (
+                  <div key={`${row.contractId}-live`} className="rounded-md border border-signal-mint/35 bg-signal-mint/10 px-3 py-2 text-sm text-signal-slate">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold text-shell-950">{row.instrument}</div>
+                      <span className="rounded-full border border-signal-mint/40 bg-white px-2 py-1 text-[11px] text-signal-mint">
+                        just detected
+                      </span>
+                    </div>
+                    <div className="mt-1">Qty {row.quantity ?? "-"} | Unit {row.unitPrice ?? "-"}</div>
+                    <div className="mt-2 rounded-md border border-signal-mint/35 bg-white/85 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Contract ID</span>
+                        <button
+                          className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
+                          onClick={() => void copyContractId(row.contractId)}
+                          type="button"
+                        >
+                          Copy CID
+                        </button>
+                      </div>
+                      <code className="mt-1 block break-all text-xs font-mono text-shell-950">{row.contractId}</code>
+                    </div>
+                  </div>
+                ))}
+                {detectedCompletions.length === 0 ? (
+                  <p className="text-sm text-signal-slate">No new accepted outcomes detected in this session yet.</p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <p className="text-sm font-semibold text-shell-950">Recent Accepted Outcomes (CID Included)</p>
+              <div className="mt-2 space-y-2">
+                {outsiderAcceptedSignals.map((signal) => (
+                  <div key={signal.contractId} className="rounded-md border border-shell-700/70 bg-shell-900/20 px-3 py-2 text-sm text-signal-slate">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold text-shell-950">{signal.instrument}</div>
+                      <span className="rounded-full border border-shell-700 bg-white px-2 py-1 text-[11px] text-signal-slate">
+                        {signal.source}
+                      </span>
+                    </div>
+                    <div className="mt-1">
+                      Qty {signal.quantity ?? "-"} | Unit {signal.unitPrice ?? "-"}
+                    </div>
+                    <div className="mt-2 rounded-md border border-shell-700/60 bg-white/80 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Contract ID</span>
+                        <button
+                          className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
+                          onClick={() => void copyContractId(signal.contractId)}
+                          type="button"
+                        >
+                          Copy CID
+                        </button>
+                      </div>
+                      <code className="mt-1 block break-all text-xs font-mono text-shell-950">{signal.contractId}</code>
+                    </div>
+                  </div>
+                ))}
+                {outsiderAcceptedSignals.length === 0 ? (
+                  <p className="text-sm text-signal-slate">No accepted outcomes yet.</p>
+                ) : null}
               </div>
             </div>
           </article>
@@ -1067,9 +1336,19 @@ export default function App() {
         </section>
       ) : null}
 
-      <footer className="mt-8 pb-8 text-xs text-signal-slate">
-        Parties: seller={aliasOf(seller)} sellerAgent={aliasOf(sellerAgent)} buyerAgent={aliasOf(buyerAgent)} outsider={aliasOf(outsider)}
-      </footer>
+      {view === "Challenge" ? (
+        <PrivacyChallengeMode
+          partyByRole={{
+            Seller: seller,
+            Buyer: buyer,
+            Outsider: outsider,
+            Inspector: company,
+          }}
+          suggestedIntentCid={suggestedIntentCid}
+          suggestedNegotiationCid={suggestedNegotiationCid}
+        />
+      ) : null}
+
     </main>
   );
 }
