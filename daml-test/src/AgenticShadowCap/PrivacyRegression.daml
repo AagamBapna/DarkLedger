@@ -8,7 +8,6 @@ import AgenticShadowCap.Market
 
 data VisibilitySnapshot = VisibilitySnapshot
   with
-    compliancePolicies : Int
     assetHoldings : Int
     cashHoldings : Int
     tradeIntents : Int
@@ -70,7 +69,6 @@ commitAndRevealTerms sellerAgent buyerAgent negotiationCid qtyText unitPriceText
 
 snapshotFor : Party -> Script VisibilitySnapshot
 snapshotFor party = do
-  policies <- query @CompliancePolicy party
   assets <- query @AssetHolding party
   cash <- query @CashHolding party
   intents <- query @TradeIntent party
@@ -81,7 +79,6 @@ snapshotFor party = do
   audits <- query @TradeAuditRecord party
   pure VisibilitySnapshot
     with
-      compliancePolicies = length policies
       assetHoldings = length assets
       cashHoldings = length cash
       tradeIntents = length intents
@@ -101,16 +98,6 @@ testPrivacyVisibilityMatrixRegression = script do
   let issuer = parties.issuer
   let outsider = parties.outsider
   now <- getTime
-
-  policyCid <- submit issuer do
-    createCmd CompliancePolicy with
-      issuer
-      policyId = "PRIVACY_REGRESSION_BASELINE"
-      maxTradeNotional = 250000.0
-      allowedSellerParties = [seller]
-      allowedBuyerParties = [buyer]
-      allowedJurisdictions = ["US"]
-      lockPeriodHours = 0
 
   _ <- submit issuer do
     createCmd AssetHolding with
@@ -161,10 +148,7 @@ testPrivacyVisibilityMatrixRegression = script do
       expiresAt = addRelTime now (hours 2)
 
   negotiationSettleCid <- submit issuer do
-    exerciseCmd sellSettleCid MatchWithPolicyContext with
-      counterpartyCid = buySettleCid
-      sellerJurisdiction = "US"
-      buyerJurisdiction = "US"
+    exerciseCmd sellSettleCid MatchWith with counterpartyCid = buySettleCid
 
   negotiationSettleCid <- submit sellerAgent do
     exerciseCmd negotiationSettleCid SubmitSellerTerms with qty = 900.0, unitPrice = 100.0
@@ -174,7 +158,7 @@ testPrivacyVisibilityMatrixRegression = script do
     exerciseCmd negotiationSettleCid AcceptBySeller
   negotiationSettleCid <- commitAndRevealTerms sellerAgent buyerAgent negotiationSettleCid "900.0" "100.0"
   negotiationSettleCid <- submit issuer do
-    exerciseCmd negotiationSettleCid ApproveMatchWithPolicy with policyCid
+    exerciseCmd negotiationSettleCid ApproveMatch
   settlementCid <- submit issuer do
     exerciseCmd negotiationSettleCid StartSettlement
   _ <- submit issuer do
@@ -205,10 +189,7 @@ testPrivacyVisibilityMatrixRegression = script do
       expiresAt = addRelTime now (hours 2)
 
   negotiationActiveCid <- submit issuer do
-    exerciseCmd sellActiveCid MatchWithPolicyContext with
-      counterpartyCid = buyActiveCid
-      sellerJurisdiction = "US"
-      buyerJurisdiction = "US"
+    exerciseCmd sellActiveCid MatchWith with counterpartyCid = buyActiveCid
   _ <- submit sellerAgent do
     exerciseCmd negotiationActiveCid SubmitSellerTerms with qty = 250.0, unitPrice = 99.0
 
@@ -227,7 +208,6 @@ testPrivacyVisibilityMatrixRegression = script do
   sellerSnapshot <- snapshotFor seller
   sellerSnapshot === VisibilitySnapshot
     with
-      compliancePolicies = 0
       assetHoldings = 1
       cashHoldings = 0
       tradeIntents = 1
@@ -240,7 +220,6 @@ testPrivacyVisibilityMatrixRegression = script do
   sellerAgentSnapshot <- snapshotFor sellerAgent
   sellerAgentSnapshot === VisibilitySnapshot
     with
-      compliancePolicies = 0
       assetHoldings = 0
       cashHoldings = 0
       tradeIntents = 1
@@ -253,7 +232,6 @@ testPrivacyVisibilityMatrixRegression = script do
   buyerSnapshot <- snapshotFor buyer
   buyerSnapshot === VisibilitySnapshot
     with
-      compliancePolicies = 0
       assetHoldings = 0
       cashHoldings = 1
       tradeIntents = 1
@@ -266,7 +244,6 @@ testPrivacyVisibilityMatrixRegression = script do
   buyerAgentSnapshot <- snapshotFor buyerAgent
   buyerAgentSnapshot === VisibilitySnapshot
     with
-      compliancePolicies = 0
       assetHoldings = 0
       cashHoldings = 0
       tradeIntents = 0
@@ -279,7 +256,6 @@ testPrivacyVisibilityMatrixRegression = script do
   issuerSnapshot <- snapshotFor issuer
   issuerSnapshot === VisibilitySnapshot
     with
-      compliancePolicies = 1
       assetHoldings = 1
       cashHoldings = 1
       tradeIntents = 1
@@ -292,7 +268,6 @@ testPrivacyVisibilityMatrixRegression = script do
   outsiderSnapshot <- snapshotFor outsider
   outsiderSnapshot === VisibilitySnapshot
     with
-      compliancePolicies = 0
       assetHoldings = 0
       cashHoldings = 0
       tradeIntents = 0

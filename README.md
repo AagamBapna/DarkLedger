@@ -1,355 +1,84 @@
 # Agentic Shadow-Cap
 
-**Confidential AI-powered dark pool for secondary market equity trading on Canton Network.**
+Confidential AI-assisted secondary share trading dApp on Canton L1, built with Daml contracts and dpm workflows.
 
-AI agents autonomously negotiate private trades using Daml smart contracts, with full sub-transaction privacy — no public order book, no open pools, no DeFi patterns. Canton's privacy model ensures only stakeholders see their data.
+## Canton L1 Privacy Bounty Fit
 
-## Why This Matters
+### Bounty Summary
 
-Traditional secondary markets for institutional assets (private equity, pre-IPO shares, venture fund stakes) suffer from two problems:
+Track goal: Build a dApp on Canton L1 using Daml and dpm, with strong privacy-first design.
 
-1. **Information leakage**: Public order books reveal trading intent, enabling front-running and adverse selection.
-2. **Manual negotiation**: Trades require weeks of back-and-forth between legal teams.
+Bounty category:
+- Launch MVP on Testnet or Mainnet
+- Feature Usage
+- Meaningful Open Source Contribution
+- Early Stage Startup
 
-**Agentic Shadow-Cap** solves both by combining Canton's sub-transaction privacy with autonomous AI agents that act as "legal representatives" — discovering counterparties, negotiating prices, and settling trades atomically, all without exposing any information to unauthorized observers.
+Prize pool:
+- Total: $8,000
+- Winners: 3 projects
+- 1st: $5,000
+- 2nd: $2,000
+- 3rd: $1,000
 
-## Architecture
+Note from bounty brief: prizes can be adjusted or withheld if qualifying submissions are too few or do not meet criteria.
 
-```
-┌────────────────────┐    ┌────────────────────┐    ┌────────────────────┐
-│  Seller Participant│    │  Buyer Participant  │    │ Issuer Participant │
-│    Node :5011      │    │    Node :5021       │    │    Node :5031      │
-│                    │    │                     │    │                    │
-│  Seller Party      │    │  Buyer Party        │    │  Company Party     │
-│  SellerAgent Party │    │  BuyerAgent Party   │    │  (Compliance/ROFR) │
-│                    │    │                     │    │                    │
-│  ┌──────────────┐  │    │  ┌──────────────┐   │    │                    │
-│  │ Python Agent │  │    │  │ Python Agent │   │    │                    │
-│  │ (LLM+Rules)  │  │    │  │ (LLM+Rules)  │   │    │                    │
-│  └──────────────┘  │    │  └──────────────┘   │    │                    │
-└─────────┬──────────┘    └─────────┬───────────┘    └─────────┬──────────┘
-          │                        │                           │
-          └────────────────────────┼───────────────────────────┘
-                                   │
-                          ┌────────┴────────┐
-                          │  Canton Domain  │
-                          │  (Privacy Layer)│
-                          │   :5018-5019    │
-                          └─────────────────┘
+### Submission Artifacts (fill these before final submission)
 
-         ┌──────────────────────────────────────────┐
-         │        Nginx Proxy :7575                 │
-         │  Routes by X-Ledger-Party header         │
-         │  Seller/SellerAgent → seller-node:5013   │
-         │  Buyer/BuyerAgent   → buyer-node:5023    │
-         │  Company            → issuer-node:5033   │
-         └──────────────────────────────────────────┘
+- GitHub repo: `https://github.com/<org-or-user>/canton`
+- Live demo URL: `https://<your-demo-url>`
+- 2-5 minute demo video: `https://<video-link>`
 
-         ┌──────────────────────────────────────────┐
-         │     React Dashboard :5173                │
-         │  Party Perspective Switcher              │
-         │  Owner | Market | Compliance | Agent Logs│
-         └──────────────────────────────────────────┘
-```
+### Requirement Coverage
 
-## Privacy Model — What Each Party Sees
+| Bounty Requirement | How this repo addresses it |
+|---|---|
+| Functional deployment on Canton L1 Devnet | `make devnet` + `make devnet-demo` bootstraps and runs the app stack against Canton L1 local devnet setup. |
+| Meaningful Daml usage | Core business logic is implemented in Daml templates and choices in `daml/src/AgenticShadowCap/Market.daml`. |
+| Open source | Public repo structure, Apache 2.0 license, readable source across contracts/agents/UI. |
+| Clear documentation | This README includes setup, install, run, privacy model, and demo instructions. |
+| Privacy model explanation | Party-level visibility matrix is documented below and backed by tests. |
+| Working demo | Local demo path (`make demo`) plus Canton L1 path (`make devnet-demo`), with UI perspective switching to show privacy boundaries. |
+| 2-5 minute demo video | Video checklist is included below for submission completeness. |
 
-This is the core innovation. Canton's sub-transaction privacy ensures **no global ledger state** — each party only sees contracts they are a stakeholder of.
+## What This dApp Does
 
-| Contract | Seller | SellerAgent | Buyer | BuyerAgent | Issuer (Company) | Public/Outsider |
+Agentic Shadow-Cap is a private OTC-style flow for secondary market deals:
+
+1. Seller posts a private intent.
+2. Agents publish blind discovery signals (no public order book, no public price/size broadcast).
+3. Issuer matches counterparties into a private negotiation channel.
+4. Both sides commit and reveal terms.
+5. Issuer approves and starts settlement.
+6. Settlement and audit records are written with party-scoped visibility.
+
+## Privacy Model (Who Can See What)
+
+Canton privacy is enforced through Daml stakeholders (signatories + observers). Unauthorized parties see nothing.
+
+| Contract Template | Seller | SellerAgent | Buyer | BuyerAgent | Issuer (Company) | Outsider/Public |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **AssetHolding** (Seller's shares) | Observer | - | - | - | Signatory | - |
-| **CashHolding** (Buyer's cash) | - | - | Observer | - | Signatory | - |
-| **TradeIntent** (sell directive) | Signatory | Observer | - | - | Observer | - |
-| **DiscoveryInterest** (blind signal) | Observer | Signatory | - | Targeted | Observer | - |
-| **PrivateNegotiation** | Observer | Observer | Observer | Observer | Signatory | - |
-| **TradeSettlement** | Observer | Observer | Observer | Observer | Signatory | - |
-| **TradeAuditRecord** | Observer | Observer | Observer | Observer | Signatory | - |
-| **AgentDecisionLog** | Observer | Signatory | - | - | - | - |
+| `AssetHolding` | Observer |  |  |  | Signatory |  |
+| `CashHolding` |  |  | Observer |  | Signatory |  |
+| `TradeIntent` | Signatory | Observer | Observer |  | Observer |  |
+| `DiscoveryInterest` | Owner observer (if owner) | Signatory (if posting agent) | Owner observer (if owner) | Targeted observer (if included in `discoverableBy`) | Observer |  |
+| `CommittedTerms` | Observer | Observer | Observer | Observer | Observer |  |
+| `PrivateNegotiation` | Observer | Observer | Observer | Observer | Signatory |  |
+| `TradeSettlement` | Observer | Observer | Observer | Observer | Signatory |  |
+| `TradeAuditRecord` | Observer | Observer | Observer | Observer | Signatory |  |
+| `AgentDecisionLog` | Owner observer | Signatory (agent) |  |  |  |  |
 
-**Key insight**: The "Public" perspective in the UI shows **zero contracts** — demonstrating that an unauthorized observer cannot see any market activity whatsoever.
+Key point: an outsider/public party is not a stakeholder on private contracts, so visibility is zero.
 
-## Quick Start
+## Quick Start (Local)
 
 ### Prerequisites
-- [dpm (Digital Asset Package Manager)](https://docs.digitalasset.com/build/3.4/getting-started/installation.html)
-- Java 17+ (required by Daml tooling)
-- [Docker + Docker Compose](https://docs.docker.com/get-docker/)
-- [Node.js 18+](https://nodejs.org/) (for the React UI)
-- Python 3.10+ (for agents)
 
-### One-Command Demo (requires Docker + dpm)
-```bash
-make demo
-```
-This will: build Daml → start Canton nodes → upload DAR → seed data → start agents → start UI.
-
-Open http://localhost:5173 to see the dashboard.
-
-### Sandbox Demo (no Docker needed)
-```bash
-make sandbox
-```
-Runs the full Daml workflow on a local sandbox (no multi-node privacy separation).
-
-### Manual Step-by-Step
-```bash
-# 1. Build Daml contracts
-make build
-
-# 2. Start Canton nodes (Docker)
-make up
-
-# 3. Upload DAR to all nodes
-make upload
-
-# 4. Seed deterministic demo data (holdings + trade intent)
-make seed
-
-# 5. Start AI agents + market event API
-make agents
-
-# 6. Start React dashboard
-make ui
-```
-
-### Stopping
-```bash
-make agents-stop   # Stop Python agents
-make ui-stop       # Stop Vite dev server
-make down          # Stop Docker containers
-```
-
-### Public Web Demo (No Docker)
-Use this path if you only need a publicly accessible web dApp URL with party-visibility proof.
-
-```bash
-# 1. Prepare venv + Python deps
-make demo-web-venv
-
-# 2. Start backend (sandbox + json-api + agents + market-api + gateway)
-make demo-web-backend
-```
-
-Then run the UI in another terminal:
-
-```bash
-cd ui
-npm install
-VITE_JSON_API_URL=http://localhost:8080/ledger \
-VITE_MARKET_API_URL=http://localhost:8080/market \
-npm run dev
-```
-
-For public deployment:
-- Deploy backend process from `deploy/public_demo/` on a host with a public URL.
-- Deploy `ui/` to Vercel.
-- Set Vercel env vars:
-  - `BACKEND_PUBLIC_URL=https://<your-backend-url>`
-  - `VITE_JSON_API_URL=/api/ledger`
-  - `VITE_MARKET_API_URL=/api/market`
-  - `VITE_JSON_API_USE_INSECURE_TOKEN=true`
-- Use the Vercel URL as your demo URL.
-
-## Daml Smart Contracts (8 Templates)
-
-All contracts are in `daml/src/AgenticShadowCap/Market.daml`:
-
-| Template | Purpose | Key Choices |
-|---|---|---|
-| **AssetHolding** | Equity ownership | `TransferAsset`, `SplitAsset` |
-| **CashHolding** | Cash/currency balance | `TransferCash`, `SplitCash` |
-| **TradeIntent** | Seller's private sell directive | `UpdatePrice`, `ArchiveIntent` |
-| **DiscoveryInterest** | Blind market signal (no price/volume) | `MatchWith`, `CancelInterest`, `RetireForMatch` |
-| **PrivateNegotiation** | Two-party negotiation channel | `SubmitSellerTerms`, `SubmitBuyerTerms`, `AcceptBySeller`, `AcceptByBuyer`, `ApproveMatch`, `StartSettlement` |
-| **TradeSettlement** | Atomic DvP swap | `FinalizeSettlement` (real DvP), `SimpleFinalizeSettlement` (audit-only) |
-| **TradeAuditRecord** | Immutable settlement record | (none - append-only) |
-| **AgentDecisionLog** | AI reasoning audit trail | (none - append-only) |
-
-### Test Coverage
-20 passing test cases covering:
-- Happy-path full lifecycle (with and without DvP)
-- Privacy: TradeIntent invisible to Buyer
-- Privacy: Negotiation invisible to outsiders
-- Privacy: Discovery signal scoped to targeted parties
-- Validation: zero/negative quantities, zero prices
-- Validation: ApproveMatch requires both-party acceptance
-- Validation: same-side matching and self-matching blocked
-- Rejection: mid-flight negotiation archival
-- Asset split and transfer
-
-## Python AI Agents
-
-### Agent Framework (`agent/base_agent.py`)
-Both agents extend `BaseAgent`, which provides:
-- dual connection modes: `dazl` (gRPC) or `http-json` via v1 compatibility gateway
-- Concurrent async loop execution
-- Market data + agent control loading
-- Ledger query/create/exercise with retry
-- On-ledger decision logging
-
-### Seller Agent (`agent/seller_agent.py`)
-- **Repricing loop**: Monitors `TradeIntent` contracts. Uses LLM (or rule-based fallback) to adjust `minPrice` based on:
-  - Market volatility (from `mock_market_feed.json`)
-  - **News sentiment**: If "negative" → increase minPrice by 5%. If "very_negative" → archive intent.
-  - Absolute floor protection: never drops below 60% of original price.
-- **Discovery loop**: Automatically posts `DiscoveryInterest` (Sell) for each active intent — revealing only instrument + side (no price/volume).
-- **Negotiation loop**: Submits initial terms, evaluates counteroffers, accepts or counters.
-
-### Buyer Agent (`agent/buyer_agent.py`)
-- **Discovery loop**: Monitors for sell-side `DiscoveryInterest` signals. Posts matching buy signal when mandate matches.
-- **Negotiation loop**: Evaluates seller terms against dynamic `maxPrice` ceiling. Accepts if within range, counters at ceiling otherwise.
-- Absolute ceiling protection: never exceeds 140% of original max price.
-
-### LLM Advisor (`agent/llm_advisor.py`)
-- Calls OpenAI GPT-4o-mini for pricing/negotiation decisions
-- Graceful fallback to rule-based logic when no API key is set
-- Every decision logged on-ledger in `AgentDecisionLog`
-
-### Market Event API (`agent/market_api.py`)
-FastAPI sidecar on port 8090:
-- `POST /market-event` — Inject events (earnings, SEC investigation, crash, etc.)
-- `GET /status` — Agent health + current feed state
-- `GET /events` — List available event types
-- `GET/POST /agent-config` — Toggle auto-repricing per agent
-
-## React Dashboard
-
-### Perspective Switcher
-Switch between parties to see Canton's privacy model in action:
-
-| Perspective | What You See |
-|---|---|
-| **Seller / SellerAgent** | Private holdings, trade intents, active negotiations, agent activity timeline, news injector |
-| **Buyer / BuyerAgent** | Cash holdings, negotiations where buyer is involved |
-| **Company (Issuer)** | All negotiations for compliance review, ROFR approval buttons, DvP settlement monitor, audit trail |
-| **Public** | **NOTHING** — zero contracts, zero holdings. Canton's privacy proven. |
-
-### Views
-- **Owner View**: Holdings, trade intents with manual price override, private negotiations, news event injector, agent activity timeline
-- **Market View**: Zero-data until a match is found (no public order book)
-- **Compliance View**: Negotiation approval queue, DvP settlement visualization with step progress, immutable audit trail
-- **Agent Logs View**: On-ledger AI decision reasoning with expandable market context details
-
-### Judge-Facing Privacy Theater Features
-- **Live visibility shock switch**: Compare Seller vs Outsider on the same contract ID and watch unauthorized visibility drop to zero.
-- **Commit-reveal theater**: Hash commitments shown first; exact terms appear only after both reveals.
-- **Red-team panel**: `Try to spy` probe from Outsider perspective writes explicit `private-denied` logs.
-- **Timeline replay mode**: Animated stepper from `Intent -> Discovery -> Negotiation -> Approval -> Settlement` with per-step visibility badges.
-- **Counterparty masking UX**: Negotiation views show pseudonyms (for example `Buyer-7F2A`), while issuer/settlement context reveals real identities.
-- **Privacy heatmap**: Live green/red party-template matrix refreshed after each action.
-- **Leak comparison**: Side-by-side mock public order-book leakage vs Canton private flow.
-- **Judge mode script**: One-click full private trade workflow with pause points at key proof moments.
-- **Live invariant banners**: Runtime badges for outsider visibility, replay resistance, and expired discovery handling.
-- **Mobile walkthrough polish**: Touch-friendly party chips and responsive proof cards for phone judging.
-
-### 2-5 Minute Judge Walkthrough
-1. Open the app and point to invariant banners (`Outsider Visibility`, `Replay Attack`, `Expired Discovery`).
-2. Use **Run Full Private Trade (Judge Mode)** in **Live Flow View** and pause at proof checkpoints.
-3. At the first pause, use the **visibility shock switch** to flip Seller -> Outsider on one contract ID.
-4. Resume and show **commit-reveal theater**: hashes first, terms only after both reveals.
-5. Show **privacy heatmap** updates (Party x Template matrix), especially Outsider row staying zero/red.
-6. Switch to Outsider and run **Try to spy** to generate `private-denied` red-team logs.
-7. Show settlement/audit completion in Compliance and close with the leak comparison panel.
-
-## Deployment
-
-### Docker Compose (`deploy/docker-compose.yml`)
-8 services:
-- **domain**: Canton domain (public/admin API)
-- **seller-participant**: Seller + SellerAgent parties
-- **buyer-participant**: Buyer + BuyerAgent parties
-- **issuer-participant**: Company (Issuer) party
-- **seller-agent**: Python seller agent (profile: agent)
-- **buyer-agent**: Python buyer agent (profile: agent)
-- **market-api**: FastAPI event injection (profile: agent)
-- **json-api-proxy**: Nginx routing by `X-Ledger-Party` header
-
-### Makefile Targets
-| Target | Description |
-|---|---|
-| `make build` | Compile Daml package |
-| `make up` | Start Canton nodes |
-| `make down` | Stop all containers |
-| `make upload` | Upload DAR to all nodes |
-| `make seed` | Create demo contracts |
-| `make agents` | Start seller + buyer agents + market API |
-| `make agents-stop` | Stop agent processes |
-| `make ui` | Start React dev server |
-| `make demo` | Full end-to-end workflow |
-| `make sandbox` | Local sandbox demo (no Docker) |
-| `make devnet` | Deploy to Canton L1 (Splice LocalNet) |
-| `make devnet-demo` | Start Canton demo runtime against participant APIs |
-| `make canton-network-bootstrap` | DAR upload + party map + seed on Canton v2 APIs |
-| `make canton-network-demo` | Start gateway + agents + market API for Canton |
-| `make devnet-down` | Stop Canton L1 |
-| `make status` | Show running processes |
-| `make clean` | Remove build artifacts |
-
-## Repository Layout
-
-```
-daml/
-├── daml.yaml                    # SDK 3.4.10, parties, dependencies
-├── src/AgenticShadowCap/
-│   ├── Market.daml              # 8 templates — the dark pool logic
-│   ├── MvpScript.daml           # End-to-end workflow simulation
-│   └── Tests.daml               # 20 test scenarios
-└── .daml/dist/                  # Compiled DAR
-
-agent/
-├── base_agent.py                # BaseAgent class (dazl + http-json modes)
-├── seller_agent.py              # SellerAgent (extends BaseAgent)
-├── buyer_agent.py               # BuyerAgent (extends BaseAgent)
-├── llm_advisor.py               # LLM pricing + negotiation advisor
-├── common.py                    # Shared utilities
-├── market_api.py                # FastAPI market event injection sidecar
-├── mock_market_feed.json        # Simulated market data
-├── agent_controls.json          # Auto-reprice toggles
-└── requirements.txt             # dazl, httpx, fastapi, uvicorn
-
-ui/
-├── src/
-│   ├── App.tsx                  # Root: polling, party switching, state
-│   ├── views/                   # OwnerView, MarketView, ComplianceView, AgentLogsView
-│   ├── components/              # NewsInjector, MatchFoundToast
-│   ├── lib/ledgerClient.ts      # JSON API client with party-based routing
-│   ├── types/contracts.ts       # TypeScript interfaces for all Daml contracts
-│   └── context/PartyContext.tsx  # Party state management
-├── tailwind.config.ts
-└── package.json
-
-deploy/
-├── docker-compose.yml           # 8-service Canton deployment
-├── canton/                      # Node configs + bootstrap scripts
-├── canton_network/              # Canton v2 bootstrap + v1 compatibility gateway
-├── json-api/nginx.conf          # Party-based request routing
-├── scripts/seed_demo.py         # Deterministic demo seeding
-└── devnet/                      # Canton L1 Devnet deployment guide
-```
-
-## Workflow
-
-1. **Issuer** mints `AssetHolding` (5000 shares to Seller) and `CashHolding` ($500k to Buyer)
-2. **Seller** creates `TradeIntent` (1500 shares at $95 floor) — visible only to Seller + Agent + Issuer
-3. **Seller Agent** reprices based on market data + news sentiment + LLM reasoning
-4. **Seller Agent** posts blind `DiscoveryInterest` (Sell) — reveals only instrument + side
-5. **Buyer Agent** detects sell signal, posts matching `DiscoveryInterest` (Buy)
-6. **Issuer** matches opposite interests → creates `PrivateNegotiation`
-7. **Agents** negotiate privately, logging every decision on-ledger with reasoning
-8. Both agents accept terms → **Issuer** exercises `ApproveMatch` (ROFR/compliance gate)
-9. **Issuer** starts settlement → exercises `FinalizeSettlement` (DvP atomic swap)
-10. `TradeAuditRecord` created — immutable settlement record visible to all parties
-
-## dpm (Digital Asset Package Manager)
-
-This repository now uses [dpm](https://docs.digitalasset.com/build/3.4/dpm/dpm.html) as the primary Daml CLI for all build/test flows and sandbox/bootstrap helper flows.
-
-| Command | What It Does |
-|---|---|
-| `make dpm-install` | Install dpm via official installer |
-| `make build` | Build DAR using `dpm build` |
-| `make test-daml` | Run Daml tests using `dpm test` |
+- `dpm` (Digital Asset Package Manager)
+- Java 17+
+- Python 3.10+
+- Node.js 18+
+- Docker Desktop (required for Canton L1 devnet path)
 
 Install dpm:
 
@@ -358,122 +87,170 @@ curl -fsSL https://get.digitalasset.com/install/install.sh | sh
 dpm --version
 ```
 
-## Migration Note
+### Fastest Demo Run
 
-- Replaced legacy Daml Assistant (`daml`) build/test/script/sandbox/inspect invocations with `dpm` commands.
-- Replaced `daml ledger upload-dar` usage with participant JSON API v2 package upload in `make upload`.
-- Kept DAR artifact path unchanged at `daml/.daml/dist/agentic-shadow-cap-0.1.0.dar` for deployment compatibility.
-
-## Configuration
-
-### Network Modes
-
-`CANTON_NETWORK_MODE` controls authentication behavior across all components:
-
-| Mode | Insecure Tokens | Auth Required | Use Case |
-|---|---|---|---|
-| `local` (default) | Allowed | No | Local Docker development |
-| `devnet` | Allowed | No | Canton L1 LocalNet |
-| `testnet` | **Blocked** | **Yes** | Canton TestNet |
-| `mainnet` | **Blocked** | **Yes** | Canton MainNet |
-
-In `testnet`/`mainnet`, agents/gateway/bootstrap **fail fast** with clear errors if auth tokens are missing.
-
-### Environment Variables (Network)
-| Variable | Default | Description |
-|---|---|---|
-| `CANTON_NETWORK_MODE` | `local` | Network mode (see above) |
-| `CANTON_PROVIDER_URL` | `http://127.0.0.1:3975` | Provider participant JSON API |
-| `CANTON_USER_URL` | `http://127.0.0.1:2975` | User participant JSON API |
-| `CANTON_PROVIDER_TOKEN` | (none) | JWT for provider participant |
-| `CANTON_USER_TOKEN` | (none) | JWT for user participant |
-| `CANTON_JWT_TOKEN` | (none) | Shared JWT (both participants) |
-
-### Environment Variables (Agents)
-| Variable | Default | Description |
-|---|---|---|
-| `DAML_LEDGER_URL` | `http://localhost:5011` | gRPC endpoint (dazl mode) |
-| `DAML_LEDGER_MODE` | `dazl` | `dazl` or `http-json` |
-| `DAML_HTTP_JSON_URL` | (none) | v1 gateway endpoint |
-| `SELLER_PARTY` | `Seller` | Seller party alias (configurable) |
-| `SELLER_AGENT_PARTY` | `SellerAgent` | Seller agent party alias |
-| `BUYER_PARTY` | `Buyer` | Buyer party alias |
-| `BUYER_AGENT_PARTY` | `BuyerAgent` | Buyer agent party alias |
-| `ISSUER_PARTY` | `Company` | Issuer/compliance party alias |
-| `DEMO_INSTRUMENT` | `COMPANY-SERIES-A` | Instrument name |
-| `OPENAI_API_KEY` | (none) | OpenAI key for LLM decisions (optional) |
-
-### Environment Variables (UI)
-| Variable | Default | Description |
-|---|---|---|
-| `VITE_JSON_API_URL` | `http://localhost:7575` | JSON API / gateway URL |
-| `VITE_MARKET_API_URL` | `http://localhost:8090` | Market event API URL |
-| `VITE_CANTON_NETWORK_MODE` | `local` | Controls UI endpoint labels |
-| `VITE_JSON_API_USE_INSECURE_TOKEN` | `true` | Use insecure JWT tokens |
-| `VITE_POLL_INTERVAL_MS` | `3000` | UI polling interval |
-
-## Deployment Paths
-
-### Path 1: Local Docker (Quick Test)
 ```bash
-make demo    # One command: build + nodes + upload + seed + agents + UI
-# Open http://localhost:5173
+make demo
 ```
 
-### Path 2: Canton L1 LocalNet (Recommended for Hackathon)
-```bash
-make devnet           # Download splice-node, start LocalNet, bootstrap
-make devnet-demo      # Start v1 gateway + agents + market API
+This starts a local sandbox-backed backend and UI.
 
-# Start UI (separate terminal)
-cd ui && npm install
+- UI: [http://localhost:5173](http://localhost:5173)
+- Backend status: [http://localhost:8080/status](http://localhost:8080/status)
+
+### Stop Local Demo
+
+```bash
+make demo-stop
+```
+
+### Build and Test Daml (dpm)
+
+```bash
+make dpm-build
+make dpm-test
+```
+
+Current suite includes 22 Daml script tests, including privacy regression checks.
+
+## Canton L1 Devnet Run (Bounty Requirement Path)
+
+### 1. Bootstrap Devnet
+
+```bash
+make build
+make devnet
+```
+
+### 2. Start App Runtime Against Devnet
+
+```bash
+make devnet-demo
+```
+
+### 3. Start UI
+
+```bash
+cd ui
+npm install
 VITE_JSON_API_URL=http://localhost:8081 \
-  VITE_MARKET_API_URL=http://localhost:8090 \
-  VITE_JSON_API_USE_INSECURE_TOKEN=false \
-  VITE_CANTON_NETWORK_MODE=devnet npm run dev
-
-make devnet-down      # Stop Canton L1
+VITE_MARKET_API_URL=http://localhost:8090 \
+VITE_JSON_API_USE_INSECURE_TOKEN=false \
+VITE_CANTON_NETWORK_MODE=devnet \
+npm run dev
 ```
 
-### Path 3: Public TestNet / MainNet
+### 4. Optional Lifecycle Verification
+
+```bash
+JSON_API_URL=http://localhost:8081 bash test_lifecycle.sh
+```
+
+### 5. Stop Devnet
+
+```bash
+make devnet-down
+```
+
+## Testnet/Mainnet Mode
+
+For authenticated environments:
+
 ```bash
 export CANTON_NETWORK_MODE=testnet
-export CANTON_PROVIDER_URL=https://<provider>
-export CANTON_USER_URL=https://<user>
+export CANTON_PROVIDER_URL=https://<provider-json-api>
+export CANTON_USER_URL=https://<user-json-api>
 export CANTON_PROVIDER_TOKEN=<jwt>
 export CANTON_USER_TOKEN=<jwt>
 
-make build && make canton-network-bootstrap
+make build
+make canton-network-bootstrap
 make canton-network-demo
-
-cd ui && npm install
-VITE_JSON_API_URL=http://localhost:8081 \
-  VITE_CANTON_NETWORK_MODE=testnet npm run dev
 ```
 
-### Canton L1 Key Ports
-| Service | Port |
+## UI/UX Requirement Coverage
+
+This project follows the web dApp submission path:
+
+- Functional web UI with party selector.
+- Clear indication of active party context.
+- Visibility differences per party shown live in views.
+- Responsive layout for desktop and mobile.
+- Publishable frontend (`ui/`) and backend (`deploy/public_demo/`) for a public demo URL.
+
+Public demo deployment sketch:
+
+1. Start backend from `deploy/public_demo/` on a public host.
+2. Deploy `ui/` to a static host (for example Vercel).
+3. Set proxy/env vars so `/api/ledger` and `/api/market` route to backend.
+
+## 2-5 Minute Demo Video Checklist
+
+Include these in the video:
+
+1. Party switcher and privacy boundaries.
+2. Discovery -> negotiation -> approval -> settlement flow.
+3. Proof that outsider/public sees no private contracts.
+4. Commit/reveal behavior and issuer approval step.
+5. Audit trail and final settlement state.
+6. Evidence it is running on Canton L1 devnet/testnet/mainnet.
+
+## Judging Alignment
+
+| Judging Area | Evidence in this repo |
 |---|---|
-| App Provider Ledger API | `localhost:3901` |
-| App Provider JSON API | `localhost:3975` |
-| App User Ledger API | `localhost:2901` |
-| v1 compatibility gateway | `localhost:8081` |
-| Market API | `localhost:8090` |
-| Scan Explorer | `http://scan.localhost:4000` |
+| Technical implementation | Daml contracts + tests, typed agent/UI code, reproducible Make targets. |
+| Privacy model innovation | Targeted discovery visibility, private negotiation channel, outsider-zero visibility behavior. |
+| Utility and impact | Private OTC-style flow relevant to institutional or enterprise confidential workflows. |
+| Documentation and demo quality | Clear setup/run instructions, privacy matrix, testing commands, devnet path, demo checklist. |
 
-For full deployment steps see `deploy/devnet/README.md`.
+## Example Use Cases This Maps To
 
-## Troubleshooting
+- Private DeFi / confidential lending style negotiations
+- B2B private marketplace and blind auction-like discovery
+- Supply chain or enterprise bilateral negotiation workflows
+- Healthcare or identity-like role-scoped data sharing patterns
 
-| Problem | Solution |
-|---|---|
-| Cannot connect to Docker | Start Docker Desktop |
-| Nodes not healthy | `docker ps -a` + `docker logs <container>` |
-| DAR upload fails | Ensure port is open: `nc -z localhost 5011` |
-| Memory issues (Canton L1) | Docker Desktop > Settings > Resources > Memory > 8GB+ |
-| "FATAL: cannot start on testnet" | Set `CANTON_PROVIDER_TOKEN` + `CANTON_USER_TOKEN` or use `CANTON_NETWORK_MODE=local` |
-| Agent not connecting | Check `DAML_LEDGER_MODE` and matching URL |
-| UI shows "degraded" | Verify JSON API is running: `curl http://localhost:7575/v1/parties` |
+## Impact on Canton Ecosystem
+
+- Demonstrates practical enterprise privacy patterns on Canton L1.
+- Provides a reproducible reference for developers onboarding to Daml + dpm.
+- Supplies testable patterns for privacy-sensitive app design.
+
+## Recruitment Opportunity Note
+
+Per the bounty brief, teams may have opportunities to meet with POCs during the hackathon.
+
+## Useful Resources
+
+- Builder resources: [https://github.com/Jatinp26/canton-hackathon-101](https://github.com/Jatinp26/canton-hackathon-101)
+- Canton ecosystem: [https://www.canton.network/ecosystem](https://www.canton.network/ecosystem)
+- Get started quickstart: [https://github.com/digital-asset/cn-quickstart](https://github.com/digital-asset/cn-quickstart)
+- Mentoring + community: [https://discord.com/invite/HMy2hQZySN](https://discord.com/invite/HMy2hQZySN)
+
+## Repository Layout
+
+```text
+daml/
+  src/AgenticShadowCap/Market.daml         # Core Daml templates and choices
+
+daml-test/
+  src/AgenticShadowCap/Tests.daml           # Test scenarios
+  src/AgenticShadowCap/PrivacyRegression.daml
+
+agent/
+  seller_agent.py
+  buyer_agent.py
+  market_api.py
+
+ui/
+  src/
+
+deploy/
+  devnet/
+  public_demo/
+  canton_network/
+```
 
 ## License
 
