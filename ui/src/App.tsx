@@ -3,6 +3,7 @@ import { usePartyContext } from "./context/PartyContext";
 import { ContractVisibilityInspector } from "./views/ContractVisibilityInspector";
 import { DarkAuctionView } from "./views/DarkAuctionView";
 import { LandingPage } from "./views/LandingPage";
+import { LendingWorkspaceView } from "./views/LendingWorkspaceView";
 import { PrivacyChallengeMode } from "./views/PrivacyChallengeMode";
 import {
   TEMPLATE_IDS,
@@ -22,7 +23,7 @@ import type {
   TradeSettlementPayload,
 } from "./types/contracts";
 
-type RoleView = "Landing" | "DarkAuction" | "Seller" | "Buyer" | "Outsider" | "Inspector" | "Challenge";
+type RoleView = "Landing" | "Lending" | "DarkAuction" | "Seller" | "Buyer" | "Outsider" | "Inspector" | "Challenge";
 
 type SellerChoice = "SubmitSellerTerms" | "CommitTerms" | "RevealTerms" | "AcceptBySeller" | "RejectBySeller";
 type BuyerChoice = "SubmitBuyerTerms" | "CommitTerms" | "RevealTerms" | "AcceptByBuyer" | "RejectByBuyer";
@@ -74,6 +75,7 @@ interface OutsiderAcceptedSignal { contractId: string; instrument: string; quant
 /* ── Navigation ── */
 const NAV_ITEMS: Array<{ key: RoleView; label: string; icon: string }> = [
   { key: "Landing", label: "Dashboard", icon: "grid" },
+  { key: "Lending", label: "Lending Desk", icon: "coins" },
   { key: "DarkAuction", label: "Dark Auction", icon: "auction" },
   { key: "Seller", label: "Seller Console", icon: "upload" },
   { key: "Buyer", label: "Buyer Portal", icon: "download" },
@@ -87,6 +89,7 @@ function NavIcon({ type, className }: { type: string; className?: string }) {
   const props = { className: cn, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
   switch (type) {
     case "grid": return <svg {...props}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>;
+    case "coins": return <svg {...props}><circle cx="8" cy="8" r="3.5" /><circle cx="16" cy="16" r="3.5" /><path d="M11 9.5l2 2M9.5 11l2 2" /></svg>;
     case "auction": return <svg {...props}><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></svg>;
     case "upload": return <svg {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>;
     case "download": return <svg {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>;
@@ -297,7 +300,8 @@ export default function App() {
         </div>
 
         <div className="dashboard-content">
-          {view === "Landing" && <LandingPage onOpenConsole={() => setView("Seller")} onOpenInspector={() => setView("Inspector")} onOpenDarkAuction={() => setView("DarkAuction")} stats={{ tradeIntents: tradeIntents.length, sellerNegotiations: sellerNegotiationsForSelection.length, buyerNegotiations: buyerNegotiationsForSelection.length, completedDeals: completedTotalDisplay, settlements: outsiderSettlements.length, auditRecords: outsiderAudits.length }} parties={availableParties.slice(0, 10)} />}
+          {view === "Landing" && <LandingPage onOpenConsole={() => setView("Seller")} onOpenInspector={() => setView("Inspector")} onOpenDarkAuction={() => setView("DarkAuction")} onOpenLending={() => setView("Lending")} stats={{ tradeIntents: tradeIntents.length, sellerNegotiations: sellerNegotiationsForSelection.length, buyerNegotiations: buyerNegotiationsForSelection.length, completedDeals: completedTotalDisplay, settlements: outsiderSettlements.length, auditRecords: outsiderAudits.length }} parties={availableParties.slice(0, 10)} />}
+          {view === "Lending" && <div className="animate-fade-rise"><LendingWorkspaceView /></div>}
           {view === "DarkAuction" && <div className="animate-fade-rise"><DarkAuctionView /></div>}
 
           {view === "Seller" && (

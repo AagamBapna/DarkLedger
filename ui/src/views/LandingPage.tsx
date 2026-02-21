@@ -2,6 +2,7 @@ interface LandingPageProps {
   onOpenConsole: () => void;
   onOpenInspector: () => void;
   onOpenDarkAuction: () => void;
+  onOpenLending?: () => void;
   stats: {
     tradeIntents: number;
     sellerNegotiations: number;
@@ -22,6 +23,7 @@ const STAT_CARDS = [
 
 const QUICK_ACTIONS = [
   { label: "Launch Trading Console", desc: "Start seller workflow", action: "console", gradient: "from-[#1E293B] to-[#334155]" },
+  { label: "Open Lending Desk", desc: "Lending, orderbook, advanced", action: "lending", gradient: "from-[#0EA5E9] to-[#0369A1]" },
   { label: "Open Dark Auction", desc: "Run commit-reveal auction", action: "auction", gradient: "from-[#14B8A6] to-[#0D9488]" },
   { label: "Visibility Inspector", desc: "Check contract privacy", action: "inspector", gradient: "from-[#8B5CF6] to-[#7C3AED]" },
 ];
@@ -47,9 +49,10 @@ function MiniBarChart({ bars, color, delay }: { bars: number[]; color: string; d
   );
 }
 
-export function LandingPage({ onOpenConsole, onOpenInspector, onOpenDarkAuction, stats, parties }: LandingPageProps) {
+export function LandingPage({ onOpenConsole, onOpenInspector, onOpenDarkAuction, onOpenLending, stats, parties }: LandingPageProps) {
   const statValues: Record<string, number> = { tradeIntents: stats.tradeIntents, sellerNegotiations: stats.sellerNegotiations, buyerNegotiations: stats.buyerNegotiations, completedDeals: stats.completedDeals };
-  const actionHandlers: Record<string, () => void> = { console: onOpenConsole, auction: onOpenDarkAuction, inspector: onOpenInspector };
+  const actionHandlers: Record<string, () => void> = { console: onOpenConsole, lending: () => onOpenLending?.(), auction: onOpenDarkAuction, inspector: onOpenInspector };
+  const visibleQuickActions = QUICK_ACTIONS.filter((item) => item.action !== "lending" || Boolean(onOpenLending));
 
   return (
     <div className="stagger-children space-y-6">
@@ -78,7 +81,7 @@ export function LandingPage({ onOpenConsole, onOpenInspector, onOpenDarkAuction,
           <h3 className="text-lg font-semibold text-[#1E293B]">Quick Actions</h3>
           <p className="mt-0.5 text-sm text-[#64748B]">Jump into any workflow.</p>
           <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            {QUICK_ACTIONS.map((qa) => (
+            {visibleQuickActions.map((qa) => (
               <button key={qa.action} className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${qa.gradient} p-5 text-left text-white shadow-card transition-all duration-300 hover:shadow-card-hover hover:-translate-y-1`} onClick={actionHandlers[qa.action]}>
                 <div className="pointer-events-none absolute -right-4 -top-4 h-20 w-20 rounded-full bg-white/10 transition-transform duration-500 group-hover:scale-150" />
                 <p className="text-sm font-bold">{qa.label}</p>
