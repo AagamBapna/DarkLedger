@@ -22,6 +22,55 @@ Agentic Shadow-Cap implements a private OTC-style flow:
 5. Issuer approves and starts settlement.
 6. Settlement and audit artifacts are recorded with party-scoped visibility.
 
+## Technical Extensions: Lending + Auctions
+
+Beyond the base secondary-share flow, the project includes two advanced privacy-market modules that reuse Canton-style privacy boundaries and execution semantics.
+
+### 1) Privacy-Scoped Lending Desk
+
+The lending surface is implemented in:
+
+- `ui/src/views/CreditLendingView.tsx`
+- `ui/src/hooks/useCreditLendingData.ts`
+- `ui/src/lib/creditLendingApi.ts`
+- `ui/src/views/AdvancedLendingLab.tsx`
+
+Architecture details:
+
+- `useCreditLendingData` runs an auth/data state machine (`checking`, `authenticated`, `unauthenticated`, `no-backend`) and switches between live API mode and deterministic demo mode.
+- `creditLendingApi.ts` defines a typed command/query adapter for private credit workflows (`/loans/request`, `/loans/offer`, `/market/lender-bids`, `/market/borrower-asks`, `/market/matched-proposals`, `/orderbook`, repayment and default flows).
+- In the app workspace, `LendingWorkspaceView` currently runs the lending desk in guided demo mode (`forceDemo`) so privacy behavior and lifecycle UX stay reproducible during demos.
+- `AdvancedLendingLab` adds a local matching/risk engine with:
+  - price-time matching for borrower/lender orders,
+  - order types (`GTC`, `IOC`, `FOK`),
+  - health-factor based margin monitoring,
+  - liquidation events under stress haircuts,
+  - syndicated tranche modeling and secondary tranche transfers.
+
+How this relates to Canton privacy:
+
+- Party-scoped lending state mirrors Canton’s stakeholder visibility model: each participant sees only its own requests, offers, loans, and risk context.
+- The desk emphasizes selective disclosure rather than global credit-state broadcast.
+
+### 2) Commit-Reveal Dark Auction Engine
+
+The auction module is implemented in:
+
+- `ui/src/views/DarkAuctionView.tsx`
+
+Auction mechanics:
+
+- Multi-phase auction state machine: `Idle -> Commit -> Reveal -> Settled`.
+- Buyers submit blind commitments using WebCrypto SHA-256 over tuple payloads `(rfqId | bidder | price | nonce)`.
+- Reveal phase recomputes hashes and hard-fails mismatches/timeouts as disqualifications.
+- Reserve-price gating enforces issuer policy constraints before winner selection.
+- Settlement selects best qualified price and emits a structured proof object (`winner`, `qualifiedBids`, `disqualifiedBids`, `proofHash`) exportable as JSON.
+
+How this relates to Canton privacy:
+
+- Commit/reveal maps directly to Canton’s privacy-first execution style: private intent first, bounded disclosure later.
+- Auction telemetry is designed for verifiable confidentiality proofs (who committed, who revealed, and why bids were rejected) without exposing raw intent before reveal.
+
 ## Privacy Model (Party Visibility)
 
 Canton privacy is enforced through Daml signatories and observers. Unauthorized parties are not stakeholders and therefore cannot see private contracts.
