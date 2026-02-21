@@ -31,7 +31,7 @@ const TEMPLATES: TemplateIndicator[] = [
 const EXPECTED_VISIBILITY: Record<PartyAlias, Record<keyof ContractCounts, boolean>> = {
   Seller:      { tradeIntents: true, discovery: true, negotiations: true, settlements: true, audits: true, assets: true, cash: false },
   SellerAgent: { tradeIntents: true, discovery: true, negotiations: true, settlements: true, audits: true, assets: false, cash: false },
-  Buyer:       { tradeIntents: false, discovery: true, negotiations: true, settlements: true, audits: true, assets: false, cash: true },
+  Buyer:       { tradeIntents: true, discovery: true, negotiations: true, settlements: true, audits: true, assets: false, cash: true },
   BuyerAgent:  { tradeIntents: false, discovery: true, negotiations: true, settlements: true, audits: true, assets: false, cash: false },
   Company:     { tradeIntents: true, discovery: true, negotiations: true, settlements: true, audits: true, assets: true, cash: true },
   Outsider:    { tradeIntents: false, discovery: false, negotiations: false, settlements: false, audits: false, assets: false, cash: false },

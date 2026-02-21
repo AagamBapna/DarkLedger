@@ -214,6 +214,7 @@ def ensure_trade_intent() -> None:
     issuer = party_id(ISSUER)
     seller = party_id(SELLER)
     seller_agent = party_id(SELLER_AGENT)
+    buyer = party_id(BUYER)
     tid = template_id("TradeIntent")
     existing = query_template(seller, tid)
     for item in existing:
@@ -230,6 +231,7 @@ def ensure_trade_intent() -> None:
         "issuer": issuer,
         "seller": seller,
         "sellerAgent": seller_agent,
+        "buyer": buyer,
         "instrument": INSTRUMENT,
         "quantity": str(INTENT_QTY),
         "minPrice": str(INTENT_MIN_PRICE),

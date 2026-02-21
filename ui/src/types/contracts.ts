@@ -9,6 +9,7 @@ export interface TradeIntentPayload {
   issuer: string;
   seller: string;
   sellerAgent: string;
+  buyer: string;
   instrument: string;
   quantity: string | number;
   minPrice: string | number;

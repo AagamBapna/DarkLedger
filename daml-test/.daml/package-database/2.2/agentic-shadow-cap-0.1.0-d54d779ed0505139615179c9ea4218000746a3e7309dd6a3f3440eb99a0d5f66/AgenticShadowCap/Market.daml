@@ -1,0 +1,2204 @@
+{-# LANGUAGE NoDamlSyntax #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE NoOverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE DatatypeContexts #-}
+{-# OPTIONS_GHC -Wno-unused-imports -Wno-missing-methods -Wno-deprecations -Wno-x-crypto -Wno-x-exceptions #-}
+module AgenticShadowCap.Market (
+        type AgenticShadowCap.Market.RejectBySeller(AgenticShadowCap.Market.RejectBySeller),
+        type AgenticShadowCap.Market.RejectByBuyer(AgenticShadowCap.Market.RejectByBuyer),
+        type AgenticShadowCap.Market.ExpireNegotiation(AgenticShadowCap.Market.ExpireNegotiation),
+        type AgenticShadowCap.Market.ApproveMatch(AgenticShadowCap.Market.ApproveMatch),
+        type AgenticShadowCap.Market.StartSettlement(AgenticShadowCap.Market.StartSettlement),
+        type AgenticShadowCap.Market.TradeSettlement(AgenticShadowCap.Market.TradeSettlement,
+                                                     buyer, buyerAgent, instrument, issuer,
+                                                     quantity, rofrApproved, seller, sellerAgent,
+                                                     settled, unitPrice),
+        AgenticShadowCap.Market.commitmentHashFromTerms,
+        AgenticShadowCap.Market.partyForSide,
+        type AgenticShadowCap.Market.Side(AgenticShadowCap.Market.Buy,
+                                          AgenticShadowCap.Market.Sell),
+        type AgenticShadowCap.Market.AssetHolding(AgenticShadowCap.Market.AssetHolding,
+                                                  instrument, issuer, owner, quantity),
+        type AgenticShadowCap.Market.TransferAsset(AgenticShadowCap.Market.TransferAsset,
+                                                   newOwner),
+        type AgenticShadowCap.Market.FinalizeSettlement(AgenticShadowCap.Market.FinalizeSettlement,
+                                                        buyerCashCid, sellerAssetCid),
+        type AgenticShadowCap.Market.SplitAsset(AgenticShadowCap.Market.SplitAsset,
+                                                splitQty),
+        type AgenticShadowCap.Market.CashHolding(AgenticShadowCap.Market.CashHolding,
+                                                 amount, currency, issuer, owner),
+        type AgenticShadowCap.Market.TransferCash(AgenticShadowCap.Market.TransferCash,
+                                                  newOwner),
+        type AgenticShadowCap.Market.SplitCash(AgenticShadowCap.Market.SplitCash,
+                                               splitAmount),
+        type AgenticShadowCap.Market.TradeIntent(AgenticShadowCap.Market.TradeIntent,
+                                                 buyer, instrument, issuer, minPrice, quantity,
+                                                 seller, sellerAgent),
+        type AgenticShadowCap.Market.UpdatePrice(AgenticShadowCap.Market.UpdatePrice,
+                                                 newMinPrice),
+        type AgenticShadowCap.Market.ArchiveIntent(AgenticShadowCap.Market.ArchiveIntent),
+        type AgenticShadowCap.Market.DiscoveryInterest(AgenticShadowCap.Market.DiscoveryInterest,
+                                                       createdAt, discoverableBy, expiresAt,
+                                                       instrument, issuer, owner, postingAgent,
+                                                       side, strategyTag),
+        type AgenticShadowCap.Market.CancelInterest(AgenticShadowCap.Market.CancelInterest),
+        type AgenticShadowCap.Market.ExpireInterest(AgenticShadowCap.Market.ExpireInterest),
+        type AgenticShadowCap.Market.SimpleFinalizeSettlement(AgenticShadowCap.Market.SimpleFinalizeSettlement),
+        type AgenticShadowCap.Market.RetireForMatch(AgenticShadowCap.Market.RetireForMatch),
+        type AgenticShadowCap.Market.MatchWith(AgenticShadowCap.Market.MatchWith,
+                                               counterpartyCid),
+        type AgenticShadowCap.Market.CommittedTerms(AgenticShadowCap.Market.CommittedTerms,
+                                                    buyer, buyerAgent, commitmentHash, committedAt,
+                                                    committer, instrument, issuer, seller,
+                                                    sellerAgent, side),
+        type AgenticShadowCap.Market.PrivateNegotiation(AgenticShadowCap.Market.PrivateNegotiation,
+                                                        buyer, buyerAccepted, buyerAgent,
+                                                        buyerCommitmentHash, buyerTermsRevealed,
+                                                        expiresAt, instrument, issuer,
+                                                        issuerApproved, proposedQty,
+                                                        proposedUnitPrice, seller, sellerAccepted,
+                                                        sellerAgent, sellerCommitmentHash,
+                                                        sellerTermsRevealed),
+        type AgenticShadowCap.Market.SubmitSellerTerms(AgenticShadowCap.Market.SubmitSellerTerms,
+                                                       qty, unitPrice),
+        type AgenticShadowCap.Market.SubmitBuyerTerms(AgenticShadowCap.Market.SubmitBuyerTerms,
+                                                      qty, unitPrice),
+        type AgenticShadowCap.Market.AcceptBySeller(AgenticShadowCap.Market.AcceptBySeller),
+        type AgenticShadowCap.Market.AcceptByBuyer(AgenticShadowCap.Market.AcceptByBuyer),
+        type AgenticShadowCap.Market.CommitTerms(AgenticShadowCap.Market.CommitTerms,
+                                                 commitmentHash, side),
+        type AgenticShadowCap.Market.RevealTerms(AgenticShadowCap.Market.RevealTerms,
+                                                 qtyText, salt, side, unitPriceText),
+        type AgenticShadowCap.Market.TradeAuditRecord(AgenticShadowCap.Market.TradeAuditRecord,
+                                                      buyer, buyerAgent, instrument, issuer,
+                                                      quantity, seller, sellerAgent, settledAt,
+                                                      unitPrice),
+        type AgenticShadowCap.Market.AgentDecisionLog(AgenticShadowCap.Market.AgentDecisionLog,
+                                                      agent, decision, instrument, marketContext,
+                                                      owner, reasoning, timestamp)
+    ) where
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Exception
+    ()
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Fail
+    ()
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Interface.AnyView
+    ()
+import CurrentSdk.DA.Internal.LF
+import CurrentSdk.DA.Internal.Prelude
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Prelude
+    ()
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record
+import CurrentSdk.DA.Internal.Template
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions
+    ()
+import Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Time
+    ()
+import CurrentSdk.Data.String
+import Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes
+import CurrentSdk.GHC.Err
+import Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show
+import CurrentSdk.GHC.Types
+data CurrentSdk.GHC.Types.DamlTemplate => AgentDecisionLog
+  = AgentDecisionLog {agent :: CurrentSdk.DA.Internal.LF.Party,
+                      owner :: CurrentSdk.DA.Internal.LF.Party,
+                      instrument :: CurrentSdk.GHC.Types.Text,
+                      decision :: CurrentSdk.GHC.Types.Text,
+                      reasoning :: CurrentSdk.GHC.Types.Text,
+                      timestamp :: CurrentSdk.GHC.Types.Text,
+                      marketContext :: CurrentSdk.GHC.Types.Text}
+data CurrentSdk.GHC.Types.DamlTemplate => TradeAuditRecord
+  = TradeAuditRecord {issuer :: CurrentSdk.DA.Internal.LF.Party,
+                      seller :: CurrentSdk.DA.Internal.LF.Party,
+                      buyer :: CurrentSdk.DA.Internal.LF.Party,
+                      sellerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                      buyerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                      instrument :: CurrentSdk.GHC.Types.Text,
+                      quantity :: (CurrentSdk.GHC.Types.Numeric 10),
+                      unitPrice :: (CurrentSdk.GHC.Types.Numeric 10),
+                      settledAt :: CurrentSdk.DA.Internal.LF.Time}
+data SimpleFinalizeSettlement = SimpleFinalizeSettlement {}
+data FinalizeSettlement
+  = FinalizeSettlement {sellerAssetCid :: (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding),
+                        buyerCashCid :: (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding)}
+data CurrentSdk.GHC.Types.DamlTemplate => TradeSettlement
+  = TradeSettlement {issuer :: CurrentSdk.DA.Internal.LF.Party,
+                     seller :: CurrentSdk.DA.Internal.LF.Party,
+                     sellerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                     buyer :: CurrentSdk.DA.Internal.LF.Party,
+                     buyerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                     instrument :: CurrentSdk.GHC.Types.Text,
+                     quantity :: (CurrentSdk.GHC.Types.Numeric 10),
+                     unitPrice :: (CurrentSdk.GHC.Types.Numeric 10),
+                     rofrApproved :: CurrentSdk.GHC.Types.Bool,
+                     settled :: CurrentSdk.GHC.Types.Bool}
+data StartSettlement = StartSettlement {}
+data ApproveMatch = ApproveMatch {}
+data ExpireNegotiation = ExpireNegotiation {}
+data RejectByBuyer = RejectByBuyer {}
+data RejectBySeller = RejectBySeller {}
+data RevealTerms
+  = RevealTerms {side :: AgenticShadowCap.Market.Side,
+                 qtyText :: CurrentSdk.GHC.Types.Text,
+                 unitPriceText :: CurrentSdk.GHC.Types.Text,
+                 salt :: CurrentSdk.GHC.Types.Text}
+data CommitTerms
+  = CommitTerms {side :: AgenticShadowCap.Market.Side,
+                 commitmentHash :: CurrentSdk.GHC.Types.Text}
+data AcceptByBuyer = AcceptByBuyer {}
+data AcceptBySeller = AcceptBySeller {}
+data SubmitBuyerTerms
+  = SubmitBuyerTerms {qty :: (CurrentSdk.GHC.Types.Numeric 10),
+                      unitPrice :: (CurrentSdk.GHC.Types.Numeric 10)}
+data SubmitSellerTerms
+  = SubmitSellerTerms {qty :: (CurrentSdk.GHC.Types.Numeric 10),
+                       unitPrice :: (CurrentSdk.GHC.Types.Numeric 10)}
+data CurrentSdk.GHC.Types.DamlTemplate => PrivateNegotiation
+  = PrivateNegotiation {issuer :: CurrentSdk.DA.Internal.LF.Party,
+                        seller :: CurrentSdk.DA.Internal.LF.Party,
+                        sellerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                        buyer :: CurrentSdk.DA.Internal.LF.Party,
+                        buyerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                        instrument :: CurrentSdk.GHC.Types.Text,
+                        proposedQty :: (CurrentSdk.DA.Internal.Prelude.Optional (CurrentSdk.GHC.Types.Numeric 10)),
+                        proposedUnitPrice :: (CurrentSdk.DA.Internal.Prelude.Optional (CurrentSdk.GHC.Types.Numeric 10)),
+                        sellerAccepted :: CurrentSdk.GHC.Types.Bool,
+                        buyerAccepted :: CurrentSdk.GHC.Types.Bool,
+                        issuerApproved :: CurrentSdk.GHC.Types.Bool,
+                        expiresAt :: CurrentSdk.DA.Internal.LF.Time,
+                        sellerCommitmentHash :: (CurrentSdk.DA.Internal.Prelude.Optional CurrentSdk.GHC.Types.Text),
+                        buyerCommitmentHash :: (CurrentSdk.DA.Internal.Prelude.Optional CurrentSdk.GHC.Types.Text),
+                        sellerTermsRevealed :: CurrentSdk.GHC.Types.Bool,
+                        buyerTermsRevealed :: CurrentSdk.GHC.Types.Bool}
+data CurrentSdk.GHC.Types.DamlTemplate => CommittedTerms
+  = CommittedTerms {issuer :: CurrentSdk.DA.Internal.LF.Party,
+                    seller :: CurrentSdk.DA.Internal.LF.Party,
+                    sellerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                    buyer :: CurrentSdk.DA.Internal.LF.Party,
+                    buyerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                    instrument :: CurrentSdk.GHC.Types.Text,
+                    side :: AgenticShadowCap.Market.Side,
+                    committer :: CurrentSdk.DA.Internal.LF.Party,
+                    commitmentHash :: CurrentSdk.GHC.Types.Text,
+                    committedAt :: CurrentSdk.DA.Internal.LF.Time}
+data MatchWith
+  = MatchWith {counterpartyCid :: (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.DiscoveryInterest)}
+data RetireForMatch = RetireForMatch {}
+data ExpireInterest = ExpireInterest {}
+data CancelInterest = CancelInterest {}
+data CurrentSdk.GHC.Types.DamlTemplate => DiscoveryInterest
+  = DiscoveryInterest {issuer :: CurrentSdk.DA.Internal.LF.Party,
+                       owner :: CurrentSdk.DA.Internal.LF.Party,
+                       postingAgent :: CurrentSdk.DA.Internal.LF.Party,
+                       discoverableBy :: ([] CurrentSdk.DA.Internal.LF.Party),
+                       instrument :: CurrentSdk.GHC.Types.Text,
+                       side :: AgenticShadowCap.Market.Side,
+                       strategyTag :: CurrentSdk.GHC.Types.Text,
+                       createdAt :: CurrentSdk.DA.Internal.LF.Time,
+                       expiresAt :: CurrentSdk.DA.Internal.LF.Time}
+data ArchiveIntent = ArchiveIntent {}
+data UpdatePrice
+  = UpdatePrice {newMinPrice :: (CurrentSdk.GHC.Types.Numeric 10)}
+data CurrentSdk.GHC.Types.DamlTemplate => TradeIntent
+  = TradeIntent {issuer :: CurrentSdk.DA.Internal.LF.Party,
+                 seller :: CurrentSdk.DA.Internal.LF.Party,
+                 sellerAgent :: CurrentSdk.DA.Internal.LF.Party,
+                 buyer :: CurrentSdk.DA.Internal.LF.Party,
+                 instrument :: CurrentSdk.GHC.Types.Text,
+                 quantity :: (CurrentSdk.GHC.Types.Numeric 10),
+                 minPrice :: (CurrentSdk.GHC.Types.Numeric 10)}
+data SplitCash
+  = SplitCash {splitAmount :: (CurrentSdk.GHC.Types.Numeric 10)}
+data TransferCash
+  = TransferCash {newOwner :: CurrentSdk.DA.Internal.LF.Party}
+data CurrentSdk.GHC.Types.DamlTemplate => CashHolding
+  = CashHolding {owner :: CurrentSdk.DA.Internal.LF.Party,
+                 issuer :: CurrentSdk.DA.Internal.LF.Party,
+                 currency :: CurrentSdk.GHC.Types.Text,
+                 amount :: (CurrentSdk.GHC.Types.Numeric 10)}
+data SplitAsset
+  = SplitAsset {splitQty :: (CurrentSdk.GHC.Types.Numeric 10)}
+data TransferAsset
+  = TransferAsset {newOwner :: CurrentSdk.DA.Internal.LF.Party}
+data CurrentSdk.GHC.Types.DamlTemplate => AssetHolding
+  = AssetHolding {owner :: CurrentSdk.DA.Internal.LF.Party,
+                  issuer :: CurrentSdk.DA.Internal.LF.Party,
+                  instrument :: CurrentSdk.GHC.Types.Text,
+                  quantity :: (CurrentSdk.GHC.Types.Numeric 10)}
+data Side = Buy | Sell
+partyForSide ::
+  (AgenticShadowCap.Market.Side
+   -> (CurrentSdk.DA.Internal.LF.Party
+       -> (CurrentSdk.DA.Internal.LF.Party
+           -> CurrentSdk.DA.Internal.LF.Party)))
+partyForSide _ _ _
+  = (CurrentSdk.GHC.Err.error
+       (CurrentSdk.Data.String.fromString "data-dependency stub"))
+commitmentHashFromTerms ::
+  (CurrentSdk.GHC.Types.Text
+   -> (CurrentSdk.GHC.Types.Text
+       -> (CurrentSdk.GHC.Types.Text -> CurrentSdk.GHC.Types.Text)))
+commitmentHashFromTerms _ _ _
+  = (CurrentSdk.GHC.Err.error
+       (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.UpdatePrice) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.TransferCash) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.TransferAsset) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.TradeSettlement) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.TradeIntent) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.TradeAuditRecord) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.SubmitSellerTerms) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.SubmitBuyerTerms) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.StartSettlement) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.SplitCash) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.SplitAsset) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.SimpleFinalizeSettlement) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.Side) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.RevealTerms) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.RetireForMatch) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.RejectBySeller) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.RejectByBuyer) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.PrivateNegotiation) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.MatchWith) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.FinalizeSettlement) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.ExpireNegotiation) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.ExpireInterest) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.DiscoveryInterest) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.CommittedTerms) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.CommitTerms) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.CashHolding) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.CancelInterest) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.AssetHolding) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.ArchiveIntent) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.ApproveMatch) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.AgentDecisionLog) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.AcceptBySeller) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Show.Show AgenticShadowCap.Market.AcceptByBuyer) where
+  showsPrec _ _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  show _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  showList _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "unitPriceText" AgenticShadowCap.Market.RevealTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "unitPrice" AgenticShadowCap.Market.TradeSettlement (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "unitPrice" AgenticShadowCap.Market.TradeAuditRecord (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "unitPrice" AgenticShadowCap.Market.SubmitSellerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "unitPrice" AgenticShadowCap.Market.SubmitBuyerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "timestamp" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "strategyTag" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "splitQty" AgenticShadowCap.Market.SplitAsset (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "splitAmount" AgenticShadowCap.Market.SplitCash (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "side" AgenticShadowCap.Market.RevealTerms AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "side" AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "side" AgenticShadowCap.Market.CommittedTerms AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "side" AgenticShadowCap.Market.CommitTerms AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "settledAt" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "settled" AgenticShadowCap.Market.TradeSettlement CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerTermsRevealed" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerCommitmentHash" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional CurrentSdk.GHC.Types.Text))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerAssetCid" AgenticShadowCap.Market.FinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerAgent" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerAgent" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerAgent" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerAgent" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerAgent" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "sellerAccepted" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "seller" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "seller" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "seller" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "seller" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "seller" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "salt" AgenticShadowCap.Market.RevealTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "rofrApproved" AgenticShadowCap.Market.TradeSettlement CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "reasoning" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "quantity" AgenticShadowCap.Market.TradeSettlement (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "quantity" AgenticShadowCap.Market.TradeIntent (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "quantity" AgenticShadowCap.Market.TradeAuditRecord (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "quantity" AgenticShadowCap.Market.AssetHolding (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "qtyText" AgenticShadowCap.Market.RevealTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "qty" AgenticShadowCap.Market.SubmitSellerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "qty" AgenticShadowCap.Market.SubmitBuyerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "proposedUnitPrice" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional (CurrentSdk.GHC.Types.Numeric 10)))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "proposedQty" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional (CurrentSdk.GHC.Types.Numeric 10)))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "postingAgent" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "owner" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "owner" AgenticShadowCap.Market.CashHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "owner" AgenticShadowCap.Market.AssetHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "owner" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "newOwner" AgenticShadowCap.Market.TransferCash CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "newOwner" AgenticShadowCap.Market.TransferAsset CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "newMinPrice" AgenticShadowCap.Market.UpdatePrice (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "minPrice" AgenticShadowCap.Market.TradeIntent (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "marketContext" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuerApproved" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.CashHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "issuer" AgenticShadowCap.Market.AssetHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.TradeSettlement CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.TradeIntent CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.CommittedTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.AssetHolding CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "instrument" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "expiresAt" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "expiresAt" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "discoverableBy" AgenticShadowCap.Market.DiscoveryInterest ([] CurrentSdk.DA.Internal.LF.Party))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "decision" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "currency" AgenticShadowCap.Market.CashHolding CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "createdAt" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "counterpartyCid" AgenticShadowCap.Market.MatchWith (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.DiscoveryInterest))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "committer" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "committedAt" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "commitmentHash" AgenticShadowCap.Market.CommittedTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "commitmentHash" AgenticShadowCap.Market.CommitTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerTermsRevealed" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerCommitmentHash" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional CurrentSdk.GHC.Types.Text))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerCashCid" AgenticShadowCap.Market.FinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerAgent" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerAgent" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerAgent" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerAgent" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyerAccepted" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyer" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyer" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyer" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyer" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "buyer" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "amount" AgenticShadowCap.Market.CashHolding (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.SetField "agent" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Ord AgenticShadowCap.Market.Side) where
+  compare _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (<) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (<=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (>) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (>=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  max _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  min _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.TradeSettlement) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.TradeIntent) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.TradeAuditRecord) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.PrivateNegotiation) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.DiscoveryInterest) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.CommittedTerms) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.CashHolding) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.AssetHolding) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyTemplate AgenticShadowCap.Market.AgentDecisionLog) where
+  _toAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.TradeSettlement AgenticShadowCap.Market.SimpleFinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.TradeSettlement AgenticShadowCap.Market.FinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.TradeIntent AgenticShadowCap.Market.UpdatePrice (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeIntent)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.TradeIntent AgenticShadowCap.Market.ArchiveIntent ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.SubmitSellerTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.SubmitBuyerTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.StartSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RevealTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RejectBySeller ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RejectByBuyer ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.ExpireNegotiation ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.CommitTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.ApproveMatch (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.AcceptBySeller (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.AcceptByBuyer (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.RetireForMatch ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.MatchWith (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.ExpireInterest ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.CancelInterest ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.CashHolding AgenticShadowCap.Market.TransferCash (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.CashHolding AgenticShadowCap.Market.SplitCash (((,) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding)) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding))) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.CashHolding CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.AssetHolding AgenticShadowCap.Market.TransferAsset (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding)) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.AssetHolding AgenticShadowCap.Market.SplitAsset (((,) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding)) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding))) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.AssetHolding CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasToAnyChoice AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.DA.Internal.Template.Archive ()) where
+  _toAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.TradeSettlement) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.TradeIntent) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.TradeAuditRecord) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.PrivateNegotiation) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.DiscoveryInterest) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.CommittedTerms) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.CashHolding) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.AssetHolding) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasTemplateTypeRep AgenticShadowCap.Market.AgentDecisionLog) where
+  _templateTypeRep _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.TradeSettlement) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.TradeIntent) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.TradeAuditRecord) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.PrivateNegotiation) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.DiscoveryInterest) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.CommittedTerms) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.CashHolding) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.AssetHolding) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasSignatory AgenticShadowCap.Market.AgentDecisionLog) where
+  signatory _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.TradeSettlement) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.TradeIntent) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.TradeAuditRecord) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.PrivateNegotiation) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.DiscoveryInterest) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.CommittedTerms) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.CashHolding) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.AssetHolding) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasObserver AgenticShadowCap.Market.AgentDecisionLog) where
+  observer _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.TradeSettlement) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.TradeIntent) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.TradeAuditRecord) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.PrivateNegotiation) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.DiscoveryInterest) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.CommittedTerms) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.CashHolding) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.AssetHolding) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Desugar.HasIsInterfaceType AgenticShadowCap.Market.AgentDecisionLog) where
+  _isInterfaceType _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.TradeSettlement) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.TradeIntent) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.TradeAuditRecord) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.PrivateNegotiation) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.DiscoveryInterest) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.CommittedTerms) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.CashHolding) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.AssetHolding) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyTemplate AgenticShadowCap.Market.AgentDecisionLog) where
+  _fromAnyTemplate _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.TradeSettlement AgenticShadowCap.Market.SimpleFinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.TradeSettlement AgenticShadowCap.Market.FinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.TradeIntent AgenticShadowCap.Market.UpdatePrice (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeIntent)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.TradeIntent AgenticShadowCap.Market.ArchiveIntent ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.SubmitSellerTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.SubmitBuyerTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.StartSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RevealTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RejectBySeller ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RejectByBuyer ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.ExpireNegotiation ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.CommitTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.ApproveMatch (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.AcceptBySeller (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.AcceptByBuyer (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.RetireForMatch ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.MatchWith (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.ExpireInterest ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.CancelInterest ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.CashHolding AgenticShadowCap.Market.TransferCash (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.CashHolding AgenticShadowCap.Market.SplitCash (((,) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding)) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding))) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.CashHolding CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.AssetHolding AgenticShadowCap.Market.TransferAsset (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding)) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.AssetHolding AgenticShadowCap.Market.SplitAsset (((,) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding)) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding))) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.AssetHolding CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFromAnyChoice AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.DA.Internal.Template.Archive ()) where
+  _fromAnyChoice _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.TradeSettlement) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.TradeIntent) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.TradeAuditRecord) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.PrivateNegotiation) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.DiscoveryInterest) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.CommittedTerms) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.CashHolding) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.AssetHolding) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasFetch AgenticShadowCap.Market.AgentDecisionLog) where
+  fetch _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.TradeSettlement AgenticShadowCap.Market.SimpleFinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.TradeSettlement AgenticShadowCap.Market.FinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.TradeIntent AgenticShadowCap.Market.UpdatePrice (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeIntent)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.TradeIntent AgenticShadowCap.Market.ArchiveIntent ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.SubmitSellerTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.SubmitBuyerTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.StartSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.TradeSettlement)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RevealTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RejectBySeller ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.RejectByBuyer ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.ExpireNegotiation ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.CommitTerms (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.ApproveMatch (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.AcceptBySeller (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.PrivateNegotiation AgenticShadowCap.Market.AcceptByBuyer (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.RetireForMatch ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.MatchWith (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.PrivateNegotiation)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.ExpireInterest ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.CancelInterest ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.CashHolding AgenticShadowCap.Market.TransferCash (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.CashHolding AgenticShadowCap.Market.SplitCash (((,) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding)) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding))) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.CashHolding CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.AssetHolding AgenticShadowCap.Market.TransferAsset (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding)) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.AssetHolding AgenticShadowCap.Market.SplitAsset (((,) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding)) (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding))) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.AssetHolding CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasExercise AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.DA.Internal.Template.Archive ()) where
+  exercise _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.TradeSettlement) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.TradeIntent) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.TradeAuditRecord) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.PrivateNegotiation) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.DiscoveryInterest) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.CommittedTerms) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.CashHolding) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.AssetHolding) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasEnsure AgenticShadowCap.Market.AgentDecisionLog) where
+  ensure _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.TradeSettlement) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.TradeIntent) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.TradeAuditRecord) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.PrivateNegotiation) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.DiscoveryInterest) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.CommittedTerms) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.CashHolding) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.AssetHolding) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasCreate AgenticShadowCap.Market.AgentDecisionLog) where
+  create _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.TradeSettlement) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.TradeIntent) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.TradeAuditRecord) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.PrivateNegotiation) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.DiscoveryInterest) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.CommittedTerms) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.CashHolding) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.AssetHolding) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Template.Functions.HasArchive AgenticShadowCap.Market.AgentDecisionLog) where
+  archive _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "unitPriceText" AgenticShadowCap.Market.RevealTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "unitPrice" AgenticShadowCap.Market.TradeSettlement (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "unitPrice" AgenticShadowCap.Market.TradeAuditRecord (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "unitPrice" AgenticShadowCap.Market.SubmitSellerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "unitPrice" AgenticShadowCap.Market.SubmitBuyerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "timestamp" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "strategyTag" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "splitQty" AgenticShadowCap.Market.SplitAsset (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "splitAmount" AgenticShadowCap.Market.SplitCash (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "side" AgenticShadowCap.Market.RevealTerms AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "side" AgenticShadowCap.Market.DiscoveryInterest AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "side" AgenticShadowCap.Market.CommittedTerms AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "side" AgenticShadowCap.Market.CommitTerms AgenticShadowCap.Market.Side)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "settledAt" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "settled" AgenticShadowCap.Market.TradeSettlement CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerTermsRevealed" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerCommitmentHash" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional CurrentSdk.GHC.Types.Text))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerAssetCid" AgenticShadowCap.Market.FinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.AssetHolding))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerAgent" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerAgent" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerAgent" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerAgent" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerAgent" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "sellerAccepted" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "seller" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "seller" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "seller" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "seller" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "seller" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "salt" AgenticShadowCap.Market.RevealTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "rofrApproved" AgenticShadowCap.Market.TradeSettlement CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "reasoning" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "quantity" AgenticShadowCap.Market.TradeSettlement (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "quantity" AgenticShadowCap.Market.TradeIntent (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "quantity" AgenticShadowCap.Market.TradeAuditRecord (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "quantity" AgenticShadowCap.Market.AssetHolding (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "qtyText" AgenticShadowCap.Market.RevealTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "qty" AgenticShadowCap.Market.SubmitSellerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "qty" AgenticShadowCap.Market.SubmitBuyerTerms (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "proposedUnitPrice" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional (CurrentSdk.GHC.Types.Numeric 10)))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "proposedQty" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional (CurrentSdk.GHC.Types.Numeric 10)))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "postingAgent" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "owner" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "owner" AgenticShadowCap.Market.CashHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "owner" AgenticShadowCap.Market.AssetHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "owner" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "newOwner" AgenticShadowCap.Market.TransferCash CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "newOwner" AgenticShadowCap.Market.TransferAsset CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "newMinPrice" AgenticShadowCap.Market.UpdatePrice (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "minPrice" AgenticShadowCap.Market.TradeIntent (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "marketContext" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuerApproved" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.CashHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "issuer" AgenticShadowCap.Market.AssetHolding CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.TradeSettlement CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.TradeIntent CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.CommittedTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.AssetHolding CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "instrument" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "expiresAt" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "expiresAt" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "discoverableBy" AgenticShadowCap.Market.DiscoveryInterest ([] CurrentSdk.DA.Internal.LF.Party))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "decision" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "currency" AgenticShadowCap.Market.CashHolding CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "createdAt" AgenticShadowCap.Market.DiscoveryInterest CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "counterpartyCid" AgenticShadowCap.Market.MatchWith (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.DiscoveryInterest))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "committer" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "committedAt" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Time)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "commitmentHash" AgenticShadowCap.Market.CommittedTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "commitmentHash" AgenticShadowCap.Market.CommitTerms CurrentSdk.GHC.Types.Text)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerTermsRevealed" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerCommitmentHash" AgenticShadowCap.Market.PrivateNegotiation (CurrentSdk.DA.Internal.Prelude.Optional CurrentSdk.GHC.Types.Text))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerCashCid" AgenticShadowCap.Market.FinalizeSettlement (CurrentSdk.DA.Internal.LF.ContractId AgenticShadowCap.Market.CashHolding))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerAgent" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerAgent" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerAgent" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerAgent" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyerAccepted" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.GHC.Types.Bool)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyer" AgenticShadowCap.Market.TradeSettlement CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyer" AgenticShadowCap.Market.TradeIntent CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyer" AgenticShadowCap.Market.TradeAuditRecord CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyer" AgenticShadowCap.Market.PrivateNegotiation CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "buyer" AgenticShadowCap.Market.CommittedTerms CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "amount" AgenticShadowCap.Market.CashHolding (CurrentSdk.GHC.Types.Numeric 10))
+instance (() =>
+          Pkg_08e57d514689e8f95f397581e060d426957a44f3dd21f82872892d6c3a117f3f.DA.Internal.Record.GetField "agent" AgenticShadowCap.Market.AgentDecisionLog CurrentSdk.DA.Internal.LF.Party)
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.UpdatePrice) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.TransferCash) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.TransferAsset) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.TradeSettlement) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.TradeIntent) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.TradeAuditRecord) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.SubmitSellerTerms) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.SubmitBuyerTerms) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.StartSettlement) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.SplitCash) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.SplitAsset) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.SimpleFinalizeSettlement) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.Side) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.RevealTerms) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.RetireForMatch) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.RejectBySeller) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.RejectByBuyer) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.PrivateNegotiation) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.MatchWith) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.FinalizeSettlement) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.ExpireNegotiation) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.ExpireInterest) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.DiscoveryInterest) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.CommittedTerms) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.CommitTerms) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.CashHolding) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.CancelInterest) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.AssetHolding) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.ArchiveIntent) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.ApproveMatch) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.AgentDecisionLog) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.AcceptBySeller) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+instance (() =>
+          Pkg_590736e6f7bc01492007ecb27f3fe75995c19fbd3d41b384aada69619fd4f76c.GHC.Classes.Eq AgenticShadowCap.Market.AcceptByBuyer) where
+  (==) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))
+  (/=) _ _
+    = (CurrentSdk.GHC.Err.error
+         (CurrentSdk.Data.String.fromString "data-dependency stub"))

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartyContext } from "./context/PartyContext";
+import { ContractVisibilityInspector } from "./views/ContractVisibilityInspector";
 import {
   TEMPLATE_IDS,
   createContract,
@@ -18,7 +19,7 @@ import type {
   TradeSettlementPayload,
 } from "./types/contracts";
 
-type RoleView = "Seller" | "Buyer" | "Outsider";
+type RoleView = "Seller" | "Buyer" | "Outsider" | "Inspector";
 
 type SellerChoice =
   | "SubmitSellerTerms"
@@ -82,8 +83,19 @@ function statusPillClass(active: boolean): string {
 }
 
 function isValidPositiveNumber(value: string): boolean {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) && parsed > 0;
+  return parsePositiveDecimal(value) !== null;
+}
+
+function parsePositiveDecimal(value: string): string | null {
+  const trimmed = value.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return trimmed;
 }
 
 function isLockedContractError(message: string): boolean {
@@ -107,12 +119,12 @@ function negotiationLaneKey(row: ContractRecord<PrivateNegotiationPayload>): str
 
 function negotiationScore(payload: PrivateNegotiationPayload): number {
   let score = 0;
-  if (payload.issuerApproved) score += 8;
-  if (payload.sellerAccepted) score += 2;
-  if (payload.buyerAccepted) score += 2;
-  if (payload.sellerTermsRevealed) score += 1;
-  if (payload.buyerTermsRevealed) score += 1;
-  if (optionalToNumber(payload.proposedQty) !== null && optionalToNumber(payload.proposedUnitPrice) !== null) score += 1;
+  if (!payload.issuerApproved) score += 100;
+  if (!isFullyAccepted(payload)) score += 40;
+  if (hasSubmittedTerms(payload)) score += 20;
+  if (isAcceptedByEither(payload)) score += 8;
+  if (payload.sellerTermsRevealed) score += 2;
+  if (payload.buyerTermsRevealed) score += 2;
   return score;
 }
 
@@ -126,6 +138,10 @@ function isAcceptedByEither(payload: PrivateNegotiationPayload): boolean {
 
 function isNegotiationClosed(payload: PrivateNegotiationPayload): boolean {
   return isFullyAccepted(payload);
+}
+
+function isNegotiationLive(payload: PrivateNegotiationPayload): boolean {
+  return !payload.issuerApproved;
 }
 
 function hasSubmittedTerms(payload: PrivateNegotiationPayload): boolean {
@@ -152,6 +168,41 @@ function collapseNegotiationLanes(
   return Array.from(byLane.values());
 }
 
+function pickBestNegotiation(
+  rows: Array<ContractRecord<PrivateNegotiationPayload>>,
+  preferredContractId: string,
+  preferredInstrument?: string | null,
+): ContractRecord<PrivateNegotiationPayload> | null {
+  const liveRows = rows.filter((row) => isNegotiationLive(row.payload));
+  if (!liveRows.length) return null;
+
+  const byCid = liveRows.find((row) => row.contractId === preferredContractId);
+  if (byCid) return byCid;
+
+  const normalizedInstrument = preferredInstrument ? normalizeInstrument(preferredInstrument) : null;
+  const candidates = normalizedInstrument
+    ? liveRows.filter((row) => normalizeInstrument(row.payload.instrument) === normalizedInstrument)
+    : liveRows;
+  if (!candidates.length) return null;
+
+  const sorted = [...candidates].sort((left, right) => {
+    const scoreDelta = negotiationScore(right.payload) - negotiationScore(left.payload);
+    if (scoreDelta !== 0) return scoreDelta;
+    return right.contractId.localeCompare(left.contractId);
+  });
+  return sorted[0] ?? null;
+}
+
+interface DetectedCompletion {
+  contractId: string;
+  instrument: string;
+  quantity: number | null;
+  unitPrice: number | null;
+  seller: string;
+  buyer: string;
+  detectedAt: string;
+}
+
 export default function App() {
   const { availableParties } = usePartyContext();
 
@@ -169,8 +220,9 @@ export default function App() {
   const [outsiderNegotiations, setOutsiderNegotiations] = useState<Array<ContractRecord<PrivateNegotiationPayload>>>([]);
   const [outsiderSettlements, setOutsiderSettlements] = useState<Array<ContractRecord<TradeSettlementPayload>>>([]);
   const [outsiderAudits, setOutsiderAudits] = useState<Array<ContractRecord<TradeAuditRecordPayload>>>([]);
-  const [sessionClosedInstruments, setSessionClosedInstruments] = useState<string[]>([]);
-  const outsiderAcceptedBaselineRef = useRef<number | null>(null);
+  const [detectedCompletions, setDetectedCompletions] = useState<DetectedCompletion[]>([]);
+  const seenAcceptedCidsRef = useRef<Set<string>>(new Set());
+  const outsiderDetectionInitializedRef = useRef(false);
 
   const seller = useMemo(() => resolveAlias(availableParties, "Seller"), [availableParties]);
   const sellerAgent = useMemo(() => resolveAlias(availableParties, "SellerAgent"), [availableParties]);
@@ -194,54 +246,27 @@ export default function App() {
   const [negotiationSalt, setNegotiationSalt] = useState("simple-demo-salt");
   const startupResetDone = useRef(false);
 
-  const sessionClosedInstrumentSet = useMemo(
-    () => new Set(sessionClosedInstruments),
-    [sessionClosedInstruments],
-  );
-
   const sellerNegotiationsForSelection = useMemo(
     () => collapseNegotiationLanes(sellerNegotiations.filter((row) =>
-      !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)))),
-    [sellerNegotiations, sessionClosedInstrumentSet],
+      isNegotiationLive(row.payload))),
+    [sellerNegotiations],
   );
 
   const buyerNegotiationsCollapsed = useMemo(
     () => collapseNegotiationLanes(buyerNegotiations.filter((row) =>
-      !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)))),
-    [buyerNegotiations, sessionClosedInstrumentSet],
+      isNegotiationLive(row.payload))),
+    [buyerNegotiations],
   );
 
   const acceptedForOutsider = useMemo(
     () => companyNegotiations.filter((row) => isNegotiationClosed(row.payload)),
     [companyNegotiations],
   );
-  const acceptedLedgerInstrumentSet = useMemo(
-    () => new Set(acceptedForOutsider.map((row) => normalizeInstrument(row.payload.instrument))),
-    [acceptedForOutsider],
-  );
-  const sessionOnlyClosedCount = useMemo(
-    () => sessionClosedInstruments.filter((instrument) => !acceptedLedgerInstrumentSet.has(instrument)).length,
-    [acceptedLedgerInstrumentSet, sessionClosedInstruments],
-  );
-  const sessionOnlyClosedInstruments = useMemo(
-    () => sessionClosedInstruments.filter((instrument) => !acceptedLedgerInstrumentSet.has(instrument)),
-    [acceptedLedgerInstrumentSet, sessionClosedInstruments],
-  );
-  const completedTotalDisplay = acceptedForOutsider.length + sessionOnlyClosedCount;
-  const closedInstrumentSet = useMemo(
-    () => new Set([...acceptedLedgerInstrumentSet, ...sessionClosedInstruments]),
-    [acceptedLedgerInstrumentSet, sessionClosedInstruments],
-  );
-  const newAcceptedSinceLoad = useMemo(() => {
-    const baseline = outsiderAcceptedBaselineRef.current;
-    const ledgerDelta = baseline === null ? 0 : Math.max(0, acceptedForOutsider.length - baseline);
-    return ledgerDelta + sessionOnlyClosedCount;
-  }, [acceptedForOutsider.length, sessionOnlyClosedCount]);
+  const completedTotalDisplay = acceptedForOutsider.length;
+  const newAcceptedSinceLoad = detectedCompletions.length;
 
   const selectedSellerNegotiation = useMemo(
-    () => sellerNegotiationsForSelection.find((row) => row.contractId === sellerNegotiationCid)
-      ?? sellerNegotiationsForSelection[0]
-      ?? null,
+    () => sellerNegotiationsForSelection.find((row) => row.contractId === sellerNegotiationCid) ?? null,
     [sellerNegotiationCid, sellerNegotiationsForSelection],
   );
 
@@ -254,35 +279,25 @@ export default function App() {
   }, [buyerNegotiationsCollapsed, selectedIntentInstrument]);
 
   const selectedBuyerNegotiation = useMemo(
-    () => buyerNegotiationsForSelection.find((row) => row.contractId === buyerNegotiationCid)
-      ?? buyerNegotiationsForSelection[0]
-      ?? null,
+    () => buyerNegotiationsForSelection.find((row) => row.contractId === buyerNegotiationCid) ?? null,
     [buyerNegotiationCid, buyerNegotiationsForSelection],
   );
 
   useEffect(() => {
-    if (!sellerNegotiationsForSelection.length) {
-      setSellerNegotiationCid("");
+    if (!sellerNegotiationCid) {
       return;
     }
-    if (
-      !sellerNegotiationCid
-      || !sellerNegotiationsForSelection.some((row) => row.contractId === sellerNegotiationCid)
-    ) {
-      setSellerNegotiationCid(sellerNegotiationsForSelection[0].contractId);
+    if (!sellerNegotiationsForSelection.some((row) => row.contractId === sellerNegotiationCid)) {
+      setSellerNegotiationCid("");
     }
   }, [sellerNegotiationCid, sellerNegotiationsForSelection]);
 
   useEffect(() => {
-    if (!buyerNegotiationsForSelection.length) {
-      setBuyerNegotiationCid("");
+    if (!buyerNegotiationCid) {
       return;
     }
-    if (
-      !buyerNegotiationCid
-      || !buyerNegotiationsForSelection.some((row) => row.contractId === buyerNegotiationCid)
-    ) {
-      setBuyerNegotiationCid(buyerNegotiationsForSelection[0].contractId);
+    if (!buyerNegotiationsForSelection.some((row) => row.contractId === buyerNegotiationCid)) {
+      setBuyerNegotiationCid("");
     }
   }, [buyerNegotiationCid, buyerNegotiationsForSelection]);
 
@@ -305,11 +320,6 @@ export default function App() {
       setSellerNegotiations(sellerNeg);
       setBuyerNegotiations(buyerNeg);
       setCompanyNegotiations(companyNeg);
-      if (outsiderAcceptedBaselineRef.current === null) {
-        outsiderAcceptedBaselineRef.current = companyNeg
-          .filter((row) => isNegotiationClosed(row.payload))
-          .length;
-      }
       setOutsiderIntents(outIntents);
       setOutsiderNegotiations(outNeg);
       setOutsiderSettlements(outSettle);
@@ -321,6 +331,38 @@ export default function App() {
       setLoading(false);
     }
   }, [buyerAgent, company, outsider, seller, sellerAgent]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    const seen = seenAcceptedCidsRef.current;
+    if (!outsiderDetectionInitializedRef.current) {
+      acceptedForOutsider.forEach((row) => seen.add(row.contractId));
+      outsiderDetectionInitializedRef.current = true;
+      return;
+    }
+
+    const newRows = acceptedForOutsider.filter((row) => !seen.has(row.contractId));
+    if (newRows.length === 0) {
+      return;
+    }
+
+    const detectedAt = new Date().toISOString();
+    const additions: DetectedCompletion[] = newRows.map((row) => ({
+      contractId: row.contractId,
+      instrument: row.payload.instrument,
+      quantity: optionalToNumber(row.payload.proposedQty),
+      unitPrice: optionalToNumber(row.payload.proposedUnitPrice),
+      seller: row.payload.seller,
+      buyer: row.payload.buyer,
+      detectedAt,
+    }));
+
+    newRows.forEach((row) => seen.add(row.contractId));
+    setDetectedCompletions((prev) => [...additions, ...prev].slice(0, 20));
+  }, [acceptedForOutsider, loading]);
 
   useEffect(() => {
     if (startupResetDone.current) {
@@ -369,35 +411,40 @@ export default function App() {
     }
   }, [refreshLedger]);
 
-  const markInstrumentClosed = useCallback((instrumentName: string) => {
-    const normalized = normalizeInstrument(instrumentName);
-    setSessionClosedInstruments((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]));
-  }, []);
-
   const createTradeIntent = useCallback(async () => {
     await runAction("Trade intent created.", async () => {
       await createContract(seller, TEMPLATE_IDS.tradeIntent, {
         issuer: company,
         seller,
         sellerAgent,
+        buyer,
         instrument,
         quantity: Number.parseFloat(quantity),
         minPrice: Number.parseFloat(minPrice),
       });
     });
-  }, [company, instrument, minPrice, quantity, runAction, seller, sellerAgent]);
+  }, [buyer, company, instrument, minPrice, quantity, runAction, seller, sellerAgent]);
 
   const negotiationArgument = useCallback(async (choice: SellerChoice | BuyerChoice): Promise<Record<string, unknown>> => {
+    const qtyDecimal = parsePositiveDecimal(negotiationQty);
+    const priceDecimal = parsePositiveDecimal(negotiationPrice);
+
     if (choice === "SubmitSellerTerms" || choice === "SubmitBuyerTerms") {
+      if (!qtyDecimal || !priceDecimal) {
+        throw new Error("Enter valid positive decimal qty and unit price.");
+      }
       return {
-        qty: Number.parseFloat(negotiationQty),
-        unitPrice: Number.parseFloat(negotiationPrice),
+        qty: qtyDecimal,
+        unitPrice: priceDecimal,
       };
     }
 
     if (choice === "CommitTerms") {
-      const qtyText = String(Number.parseFloat(negotiationQty));
-      const priceText = String(Number.parseFloat(negotiationPrice));
+      if (!qtyDecimal || !priceDecimal) {
+        throw new Error("Enter valid positive decimal qty and unit price.");
+      }
+      const qtyText = qtyDecimal;
+      const priceText = priceDecimal;
       const commitmentHash = await sha256Hex(`${qtyText}|${priceText}|${negotiationSalt}`);
       return {
         side: { tag: negotiationSide, value: {} },
@@ -406,10 +453,13 @@ export default function App() {
     }
 
     if (choice === "RevealTerms") {
+      if (!qtyDecimal || !priceDecimal) {
+        throw new Error("Enter valid positive decimal qty and unit price.");
+      }
       return {
         side: { tag: negotiationSide, value: {} },
-        qtyText: String(Number.parseFloat(negotiationQty)),
-        unitPriceText: String(Number.parseFloat(negotiationPrice)),
+        qtyText: qtyDecimal,
+        unitPriceText: priceDecimal,
         salt: negotiationSalt,
       };
     }
@@ -422,18 +472,29 @@ export default function App() {
     preferredContractId: string,
     preferredInstrument?: string | null,
   ): ContractRecord<PrivateNegotiationPayload> | null => {
-    const activeRows = rows.filter((row) =>
-      !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)));
-    if (!activeRows.length) return null;
-    const byCid = activeRows.find((row) => row.contractId === preferredContractId);
-    if (byCid) return byCid;
-    if (preferredInstrument) {
-      const normalized = normalizeInstrument(preferredInstrument);
-      const byInstrument = activeRows.find((row) => normalizeInstrument(row.payload.instrument) === normalized);
-      if (byInstrument) return byInstrument;
+    return pickBestNegotiation(rows, preferredContractId, preferredInstrument);
+  }, []);
+
+  const waitForNegotiationVisibility = useCallback(async (
+    partyForQuery: string,
+    instrumentName: string,
+    preferredCid?: string | null,
+  ): Promise<{
+    rows: Array<ContractRecord<PrivateNegotiationPayload>>;
+    match: ContractRecord<PrivateNegotiationPayload>;
+  } | null> => {
+    const normalized = normalizeInstrument(instrumentName);
+    const targetCid = preferredCid ?? "";
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const rows = await queryPrivateNegotiations(partyForQuery);
+      const match = pickBestNegotiation(rows, targetCid, normalized);
+      if (match) {
+        return { rows, match };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    return activeRows[0] ?? null;
-  }, [sessionClosedInstrumentSet]);
+    return null;
+  }, []);
 
   const runSellerAction = useCallback(async (choice?: SellerChoice): Promise<boolean> => {
     const effectiveChoice = choice ?? sellerChoice;
@@ -446,7 +507,7 @@ export default function App() {
     }
 
     return runAction(`Seller action ${effectiveChoice} executed.`, async () => {
-      const maxAttempts = 3;
+      const maxAttempts = 6;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const liveRows = await queryPrivateNegotiations(sellerAgent);
         setSellerNegotiations(liveRows);
@@ -455,18 +516,34 @@ export default function App() {
           sellerNegotiationCid,
           selectedSellerNegotiation?.payload.instrument ?? null,
         );
-        if (!live) throw new Error("No active seller-side negotiation available (it may already be accepted).");
+        if (!live) {
+          if (attempt < maxAttempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            continue;
+          }
+          throw new Error("No seller-side negotiation available. Try Buyer -> Negotiate first, then Refresh.");
+        }
         setSellerNegotiationCid(live.contractId);
 
         const arg = await negotiationArgument(effectiveChoice);
         try {
-          await exerciseChoice(
+          const exerciseResult = await exerciseChoice(
             sellerAgent,
             TEMPLATE_IDS.privateNegotiation,
             live.contractId,
             effectiveChoice,
             arg,
           );
+          const nextCid = typeof exerciseResult === "string" ? exerciseResult : "";
+          if (nextCid) {
+            const visible = await waitForNegotiationVisibility(sellerAgent, live.payload.instrument, nextCid);
+            if (visible) {
+              setSellerNegotiations(visible.rows);
+              setSellerNegotiationCid(visible.match.contractId);
+            } else {
+              setSellerNegotiationCid(nextCid);
+            }
+          }
           return;
         } catch (reason) {
           const message = reason instanceof Error ? reason.message : String(reason);
@@ -487,6 +564,7 @@ export default function App() {
     sellerNegotiationCid,
     selectedSellerNegotiation,
     pickActiveNegotiation,
+    waitForNegotiationVisibility,
   ]);
 
   const runBuyerAction = useCallback(async (choice?: BuyerChoice): Promise<boolean> => {
@@ -500,27 +578,45 @@ export default function App() {
     }
 
     return runAction(`Buyer action ${effectiveChoice} executed.`, async () => {
-      const maxAttempts = 3;
+      const maxAttempts = 6;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const liveRows = await queryPrivateNegotiations(buyerAgent);
         setBuyerNegotiations(liveRows);
         const live = pickActiveNegotiation(
           liveRows,
           buyerNegotiationCid,
-          selectedBuyerNegotiation?.payload.instrument ?? null,
+          selectedBuyerNegotiation?.payload.instrument ?? selectedIntentInstrument,
         );
-        if (!live) throw new Error("No active buyer-side negotiation available (it may already be accepted).");
+        if (!live) {
+          if (attempt < maxAttempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            continue;
+          }
+          throw new Error("No buyer-side negotiation available. Start from Trade Intents -> Negotiate.");
+        }
         setBuyerNegotiationCid(live.contractId);
 
         const arg = await negotiationArgument(effectiveChoice);
         try {
-          await exerciseChoice(
+          const exerciseResult = await exerciseChoice(
             buyerAgent,
             TEMPLATE_IDS.privateNegotiation,
             live.contractId,
             effectiveChoice,
             arg,
           );
+          const nextCid = typeof exerciseResult === "string" ? exerciseResult : "";
+          if (nextCid) {
+            const visible = await waitForNegotiationVisibility(buyerAgent, live.payload.instrument, nextCid);
+            if (visible) {
+              setBuyerNegotiations(visible.rows);
+              setSelectedIntentInstrument(visible.match.payload.instrument);
+              setBuyerNegotiationCid(visible.match.contractId);
+            } else {
+              setSelectedIntentInstrument(live.payload.instrument);
+              setBuyerNegotiationCid(nextCid);
+            }
+          }
           return;
         } catch (reason) {
           const message = reason instanceof Error ? reason.message : String(reason);
@@ -540,7 +636,9 @@ export default function App() {
     buyerAgent,
     buyerNegotiationCid,
     selectedBuyerNegotiation,
+    selectedIntentInstrument,
     pickActiveNegotiation,
+    waitForNegotiationVisibility,
   ]);
 
   const runBuyerNegotiate = useCallback(async () => {
@@ -556,38 +654,18 @@ export default function App() {
       setError("No seller-side negotiation contract available yet.");
       return;
     }
-    if (selectedSellerNegotiation.payload.sellerAccepted) {
-      setError("Seller already accepted these terms.");
-      return;
-    }
-    if (!hasSubmittedTerms(selectedSellerNegotiation.payload)) {
-      const submitted = await runSellerAction("SubmitSellerTerms");
-      if (!submitted) return;
-    }
     const accepted = await runSellerAction("AcceptBySeller");
-    if (accepted) {
-      markInstrumentClosed(selectedSellerNegotiation.payload.instrument);
-    }
-  }, [markInstrumentClosed, runSellerAction, selectedSellerNegotiation]);
+    if (!accepted) return;
+  }, [runSellerAction, selectedSellerNegotiation]);
 
   const runBuyerAcceptOffer = useCallback(async () => {
     if (!selectedBuyerNegotiation) {
       setError("No buyer-side negotiation contract available yet.");
       return;
     }
-    if (selectedBuyerNegotiation.payload.buyerAccepted) {
-      setError("Buyer already accepted these terms.");
-      return;
-    }
-    if (!hasSubmittedTerms(selectedBuyerNegotiation.payload)) {
-      const submitted = await runBuyerAction("SubmitBuyerTerms");
-      if (!submitted) return;
-    }
     const accepted = await runBuyerAction("AcceptByBuyer");
-    if (accepted) {
-      markInstrumentClosed(selectedBuyerNegotiation.payload.instrument);
-    }
-  }, [markInstrumentClosed, runBuyerAction, selectedBuyerNegotiation]);
+    if (!accepted) return;
+  }, [runBuyerAction, selectedBuyerNegotiation]);
 
   const runBuyerNegotiateFromIntent = useCallback(async (intent: ContractRecord<TradeIntentPayload>) => {
     const qty = optionalToNumber(intent.payload.quantity);
@@ -606,22 +684,9 @@ export default function App() {
       const liveRows = await queryPrivateNegotiations(buyerAgent);
       setBuyerNegotiations(liveRows);
       const normalizedInstrument = normalizeInstrument(intent.payload.instrument);
-      if (closedInstrumentSet.has(normalizedInstrument)) {
-        throw new Error("This intent already has an accepted offer. Negotiation is closed.");
-      }
-      const closedRows = liveRows.filter((row) =>
-        isNegotiationClosed(row.payload) && normalizeInstrument(row.payload.instrument) === normalizedInstrument);
-      if (closedRows.length > 0) {
-        throw new Error("This intent already has an accepted offer. Negotiation is closed.");
-      }
-      const activeRows = liveRows.filter((row) =>
-        !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)));
-      const match = activeRows.find(
-        (row) => normalizeInstrument(row.payload.instrument) === normalizedInstrument,
-      ) ?? null;
+      const match = pickBestNegotiation(liveRows, "", normalizedInstrument);
 
       if (!match) {
-        const createdAt = new Date().toISOString();
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
         const payload: Record<string, unknown> = {
           issuer: company,
@@ -629,70 +694,45 @@ export default function App() {
           sellerAgent,
           buyer,
           buyerAgent,
-          sellerJurisdiction: "US",
-          buyerJurisdiction: "US",
           instrument: intent.payload.instrument,
           proposedQty: null,
           proposedUnitPrice: null,
           sellerAccepted: false,
           buyerAccepted: false,
           issuerApproved: false,
-          createdAt,
           expiresAt,
           sellerCommitmentHash: null,
           buyerCommitmentHash: null,
           sellerTermsRevealed: false,
           buyerTermsRevealed: false,
         };
-
-        const defaultForMissingField = (field: string): unknown => {
-          if (field === "createdAt") return createdAt;
-          if (field === "expiresAt") return expiresAt;
-          if (field === "sellerJurisdiction" || field === "buyerJurisdiction") return "US";
-          return "";
-        };
-
-        let created: ContractRecord<PrivateNegotiationPayload> | null = null;
-        for (let attempt = 0; attempt < 6; attempt += 1) {
-          try {
-            created = await createContract<PrivateNegotiationPayload>(
-              company,
-              TEMPLATE_IDS.privateNegotiation,
-              payload,
-            );
-            break;
-          } catch (reason) {
-            const message = reason instanceof Error ? reason.message : String(reason);
-            const missingMatch = message.match(/Missing non-optional field:\s*([A-Za-z0-9_]+)/);
-            if (missingMatch) {
-              const field = missingMatch[1];
-              payload[field] = defaultForMissingField(field);
-              continue;
-            }
-            const unknownMatch = message.match(/Unknown field:\s*([A-Za-z0-9_]+)/);
-            if (unknownMatch) {
-              const field = unknownMatch[1];
-              delete payload[field];
-              continue;
-            }
-            throw reason;
-          }
+        const created = await createContract<PrivateNegotiationPayload>(
+          company,
+          TEMPLATE_IDS.privateNegotiation,
+          payload,
+        );
+        const visible = await waitForNegotiationVisibility(buyerAgent, intent.payload.instrument, created.contractId);
+        if (visible) {
+          setBuyerNegotiations(visible.rows);
+          setSelectedIntentInstrument(intent.payload.instrument);
+          setBuyerNegotiationCid(visible.match.contractId);
+        } else {
+          setSelectedIntentInstrument(intent.payload.instrument);
+          setBuyerNegotiationCid(created.contractId);
         }
-        if (!created) {
-          throw new Error("Could not create negotiation: payload schema mismatch across package versions.");
-        }
-
-        setSelectedIntentInstrument(intent.payload.instrument);
-        setBuyerNegotiationCid(created.contractId);
       } else {
-        setSelectedIntentInstrument(intent.payload.instrument);
-        setBuyerNegotiationCid(match.contractId);
+        const visible = await waitForNegotiationVisibility(buyerAgent, intent.payload.instrument, match.contractId);
+        if (visible) {
+          setBuyerNegotiations(visible.rows);
+          setSelectedIntentInstrument(intent.payload.instrument);
+          setBuyerNegotiationCid(visible.match.contractId);
+        } else {
+          setSelectedIntentInstrument(intent.payload.instrument);
+          setBuyerNegotiationCid(match.contractId);
+        }
       }
     });
-  }, [buyer, buyerAgent, closedInstrumentSet, company, runAction, seller, sellerAgent, sessionClosedInstrumentSet]);
-
-  const outsiderPrivateCount = outsiderIntents.length + outsiderNegotiations.length;
-  const outsiderPublicCount = outsiderSettlements.length + outsiderAudits.length;
+  }, [buyer, buyerAgent, company, runAction, seller, sellerAgent, waitForNegotiationVisibility]);
 
   const selectedTerms = (payload: PrivateNegotiationPayload) => {
     const qty = optionalToNumber(payload.proposedQty);
@@ -728,7 +768,7 @@ export default function App() {
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          {(["Seller", "Buyer", "Outsider"] as RoleView[]).map((role) => (
+          {(["Seller", "Buyer", "Outsider", "Inspector"] as RoleView[]).map((role) => (
             <button
               key={role}
               className={`rounded-full px-4 py-2 text-sm font-semibold ${statusPillClass(view === role)}`}
@@ -811,6 +851,7 @@ export default function App() {
                 value={selectedSellerNegotiation?.contractId ?? ""}
                 onChange={(event) => setSellerNegotiationCid(event.target.value)}
               >
+                <option value="">Select negotiation</option>
                 {sellerNegotiationsForSelection.map((row) => (
                   <option key={row.contractId} value={row.contractId}>
                     {row.payload.instrument} • {shortId(row.contractId)}
@@ -834,7 +875,11 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <p className="mt-3 text-sm text-signal-slate">No seller-visible negotiations yet.</p>
+              <p className="mt-3 text-sm text-signal-slate">
+                {sellerNegotiationsForSelection.length > 0
+                  ? "Select a negotiation to continue."
+                  : "No seller-visible negotiations yet."}
+              </p>
             )}
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -885,7 +930,6 @@ export default function App() {
             </p>
             <div className="mt-3 grid gap-2">
               {tradeIntents.map((intent) => {
-                const closed = closedInstrumentSet.has(normalizeInstrument(intent.payload.instrument));
                 return (
                   <div key={intent.contractId} className="rounded-md border border-shell-700/70 px-3 py-2 text-sm">
                     <div className="font-semibold text-shell-950">{intent.payload.instrument}</div>
@@ -896,9 +940,9 @@ export default function App() {
                       <button
                         className="rounded-md border border-shell-700 px-3 py-1 text-xs font-semibold text-shell-950 disabled:cursor-not-allowed disabled:text-signal-slate"
                         onClick={() => void runBuyerNegotiateFromIntent(intent)}
-                        disabled={busy || closed}
+                        disabled={busy}
                       >
-                        {closed ? "Closed" : "Negotiate"}
+                        Negotiate
                       </button>
                     </div>
                   </div>
@@ -922,6 +966,7 @@ export default function App() {
                 onChange={(event) => setBuyerNegotiationCid(event.target.value)}
                 disabled={buyerNegotiationsForSelection.length === 0}
               >
+                <option value="">Select negotiation</option>
                 {buyerNegotiationsForSelection.map((row) => (
                   <option key={row.contractId} value={row.contractId}>
                     {row.payload.instrument} • {shortId(row.contractId)}
@@ -948,9 +993,11 @@ export default function App() {
               </div>
             ) : (
               <p className="mt-3 text-sm text-signal-slate">
-                {selectedIntentInstrument
-                  ? `No negotiation exists yet for ${selectedIntentInstrument}.`
-                  : "No buyer-visible negotiations yet."}
+                {buyerNegotiationsForSelection.length > 0
+                  ? "Select a negotiation to continue."
+                  : selectedIntentInstrument
+                    ? `No negotiation exists yet for ${selectedIntentInstrument}.`
+                    : "No buyer-visible negotiations yet."}
               </p>
             )}
 
@@ -994,29 +1041,9 @@ export default function App() {
       ) : null}
 
       {view === "Outsider" ? (
-        <section className="mt-6 grid gap-6 lg:grid-cols-2">
+        <section className="mt-6">
           <article className="rounded-2xl border border-shell-700 bg-white p-5">
-            <h2 className="text-xl font-semibold text-shell-950">Private Data Access</h2>
-            <p className="mt-1 text-sm text-signal-slate">
-              Outsider cannot inspect private intents or negotiation terms.
-            </p>
-
-            <div className="mt-4 rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm">
-              <div className="font-semibold text-shell-950">Private records visible to outsider</div>
-              <div className="mt-1 text-signal-slate">TradeIntents: {outsiderIntents.length}</div>
-              <div className="text-signal-slate">PrivateNegotiations: {outsiderNegotiations.length}</div>
-              <div className={`mt-2 font-semibold ${outsiderPrivateCount === 0 ? "text-signal-mint" : "text-signal-coral"}`}>
-                {outsiderPrivateCount === 0 ? "Blocked as expected." : "Unexpected visibility detected."}
-              </div>
-            </div>
-          </article>
-
-          <article className="rounded-2xl border border-shell-700 bg-white p-5">
-            <h2 className="text-xl font-semibold text-shell-950">Joint Outcome Signal</h2>
-            <p className="mt-1 text-sm text-signal-slate">
-              Outsider sees summary outcome signals only, never private terms.
-            </p>
-
+            <h2 className="text-xl font-semibold text-shell-950">Outsider Outcome Signal</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
                 <div className="text-xs uppercase tracking-[0.12em]">Completed (Total)</div>
@@ -1026,56 +1053,17 @@ export default function App() {
                 <div className="text-xs uppercase tracking-[0.12em]">New Since Load</div>
                 <div className="mt-1 text-2xl font-semibold text-shell-950">{newAcceptedSinceLoad}</div>
               </div>
-              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-                <div className="text-xs uppercase tracking-[0.12em]">Public Settlements</div>
-                <div className="mt-1 text-2xl font-semibold text-shell-950">{outsiderSettlements.length}</div>
-              </div>
-              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-                <div className="text-xs uppercase tracking-[0.12em]">Public Audits</div>
-                <div className="mt-1 text-2xl font-semibold text-shell-950">{outsiderAudits.length}</div>
-              </div>
             </div>
-
-            <div className="mt-3 rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-              <div className="font-semibold text-shell-950">
-                {newAcceptedSinceLoad > 0
-                  ? "New completed negotiation detected in this session."
-                  : completedTotalDisplay > 0
-                    ? "Only historical completed negotiations detected."
-                    : outsiderPublicCount > 0
-                      ? "Public completion artifact detected."
-                      : "No outcome signal yet."}
-              </div>
-              <div className="mt-1 text-xs">
-                Total includes historical ledger state; "New Since Load" tracks only this browser session.
-              </div>
-            </div>
-
-            {sessionOnlyClosedInstruments.slice(0, 3).map((instrumentName) => (
-              <div key={`session-${instrumentName}`} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
-                <div className="font-semibold text-shell-950">Completed (Session)</div>
-                <div>{instrumentName.toUpperCase()}</div>
-              </div>
-            ))}
-            {acceptedForOutsider.slice(0, 3).map((row) => (
-              <div key={row.contractId} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
-                <div className="font-semibold text-shell-950">Completed {shortId(row.contractId)}</div>
-                <div>{row.payload.instrument}</div>
-              </div>
-            ))}
-            {outsiderSettlements.slice(0, 3).map((row) => (
-              <div key={row.contractId} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
-                <div className="font-semibold text-shell-950">Settlement {shortId(row.contractId)}</div>
-                <div>{row.payload.instrument} | Qty {optionalToNumber(row.payload.quantity)}</div>
-              </div>
-            ))}
-            {outsiderAudits.slice(0, 3).map((row) => (
-              <div key={row.contractId} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
-                <div className="font-semibold text-shell-950">Audit {shortId(row.contractId)}</div>
-                <div>{row.payload.instrument} | Settled at {row.payload.settledAt}</div>
-              </div>
-            ))}
           </article>
+        </section>
+      ) : null}
+
+      {view === "Inspector" ? (
+        <section className="mt-6">
+          <ContractVisibilityInspector
+            availableParties={availableParties}
+            activeParty={view}
+          />
         </section>
       ) : null}
 

@@ -38,6 +38,7 @@ mvpBootstrap = script do
         issuer
         seller
         sellerAgent
+        buyer
         instrument = "COMPANY-SERIES-A"
         quantity = 1500.0
         minPrice = 95.0

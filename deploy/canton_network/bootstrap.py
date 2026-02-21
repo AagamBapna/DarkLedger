@@ -580,6 +580,7 @@ def _ensure_seed_data(
                 "issuer": issuer,
                 "seller": seller,
                 "sellerAgent": seller_agent,
+                "buyer": buyer,
                 "instrument": instrument,
                 "quantity": str(intent_qty),
                 "minPrice": str(intent_min_price),

@@ -425,6 +425,7 @@ export function FlowView({
         issuer: company,
         seller,
         sellerAgent,
+        buyer,
         instrument,
         quantity: Number.parseFloat(quantity),
         minPrice: Number.parseFloat(minPrice),

@@ -142,6 +142,14 @@ async function queryTemplate<TPayload>(
   }));
 }
 
+export async function queryContractsByTemplate<TPayload = Record<string, unknown>>(
+  party: Party,
+  templateId: string,
+  query: Record<string, unknown> | null = null,
+): Promise<Array<ContractRecord<TPayload>>> {
+  return queryTemplate<TPayload>(party, templateId, query);
+}
+
 export async function queryAssetHoldings(party: Party) {
   return queryTemplate<AssetHoldingPayload>(party, TEMPLATE_IDS.assetHolding);
 }

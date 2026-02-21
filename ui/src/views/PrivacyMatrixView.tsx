@@ -64,7 +64,7 @@ function expectedVisibility(template: TemplateKey, party: string): boolean {
   if (alias === "Outsider") return false;
 
   if (template === "tradeIntents") {
-    return alias === "Seller" || alias === "SellerAgent" || alias === "Company";
+    return alias === "Seller" || alias === "SellerAgent" || alias === "Buyer" || alias === "Company";
   }
 
   if (template === "discovery") {

@@ -131,6 +131,7 @@ testPrivacyVisibilityMatrixRegression = script do
       issuer
       seller
       sellerAgent
+      buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 1200.0
       minPrice = 95.0
@@ -255,7 +256,7 @@ testPrivacyVisibilityMatrixRegression = script do
       compliancePolicies = 0
       assetHoldings = 0
       cashHoldings = 1
-      tradeIntents = 0
+      tradeIntents = 1
       discoveryInterests = 0
       privateNegotiations = 1
       committedTerms = 2

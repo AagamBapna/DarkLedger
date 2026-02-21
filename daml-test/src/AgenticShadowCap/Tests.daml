@@ -91,7 +91,7 @@ testHappyPathFullLifecycle = script do
 
   _ <- submit seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 1500.0
       minPrice = 95.0
@@ -172,21 +172,21 @@ testHappyPathWithDvP = script do
   pure ()
 
 -- ============================================================
--- Privacy: TradeIntent is invisible to Buyer / BuyerAgent
+-- Privacy: TradeIntent is visible to Buyer and hidden from BuyerAgent
 -- ============================================================
 
-testTradeIntentInvisibleToBuyer : Script ()
-testTradeIntentInvisibleToBuyer = script do
+testTradeIntentVisibleToBuyer : Script ()
+testTradeIntentVisibleToBuyer = script do
   (seller, sellerAgent, buyer, buyerAgent, issuer) <- setupParties
 
   _ <- submit seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 500.0; minPrice = 90.0
 
   buyerView <- query @TradeIntent buyer
-  length buyerView === 0
+  length buyerView === 1
   buyerAgentView <- query @TradeIntent buyerAgent
   length buyerAgentView === 0
   issuerView <- query @TradeIntent issuer
@@ -232,10 +232,10 @@ testDiscoverySignalScopedVisibility = script do
 
 testTradeIntentZeroQuantityFails : Script ()
 testTradeIntentZeroQuantityFails = script do
-  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+  (seller, sellerAgent, buyer, _buyerAgent, issuer) <- setupParties
   submitMustFail seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 0.0; minPrice = 95.0
   pure ()
@@ -246,10 +246,10 @@ testTradeIntentZeroQuantityFails = script do
 
 testTradeIntentNegativeQuantityFails : Script ()
 testTradeIntentNegativeQuantityFails = script do
-  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+  (seller, sellerAgent, buyer, _buyerAgent, issuer) <- setupParties
   submitMustFail seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = -100.0; minPrice = 95.0
   pure ()
@@ -260,10 +260,10 @@ testTradeIntentNegativeQuantityFails = script do
 
 testTradeIntentZeroPriceFails : Script ()
 testTradeIntentZeroPriceFails = script do
-  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+  (seller, sellerAgent, buyer, _buyerAgent, issuer) <- setupParties
   submitMustFail seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 1000.0; minPrice = 0.0
   pure ()
@@ -334,11 +334,11 @@ testSelfMatchingFails = script do
 
 testUpdatePriceRepricing : Script ()
 testUpdatePriceRepricing = script do
-  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+  (seller, sellerAgent, buyer, _buyerAgent, issuer) <- setupParties
 
   tradeIntentCid <- submit seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 1000.0; minPrice = 95.0
 
@@ -357,11 +357,11 @@ testUpdatePriceRepricing = script do
 
 testUpdatePriceZeroFails : Script ()
 testUpdatePriceZeroFails = script do
-  (seller, sellerAgent, _buyer, _buyerAgent, issuer) <- setupParties
+  (seller, sellerAgent, buyer, _buyerAgent, issuer) <- setupParties
 
   tradeIntentCid <- submit seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 1000.0; minPrice = 95.0
 
@@ -485,7 +485,7 @@ testOutsiderSeesZeroAcrossPrivateTemplates = script do
 
   _ <- submit seller do
     createCmd TradeIntent with
-      issuer; seller; sellerAgent
+      issuer; seller; sellerAgent; buyer
       instrument = "COMPANY-SERIES-A"
       quantity = 300.0; minPrice = 88.0
 
