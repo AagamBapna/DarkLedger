@@ -1,0 +1,580 @@
+module AgenticShadowCap.Market where
+
+import DA.Optional (fromSome, isSome)
+import DA.Action (when)
+import DA.Time (addRelTime, hours)
+import DA.Text (parseDecimal, sha256)
+
+data Side = Buy | Sell
+  deriving (Eq, Show, Ord)
+
+partyForSide : Side -> Party -> Party -> Party
+partyForSide side sellerParty buyerParty =
+  case side of
+    Sell -> sellerParty
+    Buy -> buyerParty
+
+commitmentHashFromTerms : Text -> Text -> Text -> Text
+commitmentHashFromTerms qtyText unitPriceText salt =
+  sha256 (qtyText <> "|" <> unitPriceText <> "|" <> salt)
+
+template AssetHolding
+  with
+    owner : Party
+    issuer : Party
+    instrument : Text
+    quantity : Decimal
+  where
+    signatory issuer
+    observer owner
+
+    ensure quantity > 0.0
+
+    choice TransferAsset : ContractId AssetHolding
+      with
+        newOwner : Party
+      controller issuer
+      do
+        create this with owner = newOwner
+
+    choice SplitAsset : (ContractId AssetHolding, ContractId AssetHolding)
+      with
+        splitQty : Decimal
+      controller owner
+      do
+        assertMsg "splitQty must be positive." (splitQty > 0.0)
+        assertMsg "splitQty must be less than total." (splitQty < quantity)
+        cid1 <- create this with quantity = splitQty
+        cid2 <- create this with quantity = quantity - splitQty
+        pure (cid1, cid2)
+
+template CashHolding
+  with
+    owner : Party
+    issuer : Party
+    currency : Text
+    amount : Decimal
+  where
+    signatory issuer
+    observer owner
+
+    ensure amount > 0.0
+
+    choice TransferCash : ContractId CashHolding
+      with
+        newOwner : Party
+      controller issuer
+      do
+        create this with owner = newOwner
+
+    choice SplitCash : (ContractId CashHolding, ContractId CashHolding)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "splitAmount must be positive." (splitAmount > 0.0)
+        assertMsg "splitAmount must be less than total." (splitAmount < amount)
+        cid1 <- create this with amount = splitAmount
+        cid2 <- create this with amount = amount - splitAmount
+        pure (cid1, cid2)
+
+template TradeIntent
+  with
+    issuer : Party
+    seller : Party
+    sellerAgent : Party
+    instrument : Text
+    quantity : Decimal
+    minPrice : Decimal
+  where
+    signatory seller
+    observer sellerAgent, issuer
+
+    ensure quantity > 0.0 && minPrice > 0.0
+
+    choice UpdatePrice : ContractId TradeIntent
+      with
+        newMinPrice : Decimal
+      controller sellerAgent
+      do
+        assertMsg "newMinPrice must be positive." (newMinPrice > 0.0)
+        create this with minPrice = newMinPrice
+
+    choice ArchiveIntent : ()
+      controller seller
+      do
+        pure ()
+
+template CompliancePolicy
+  with
+    issuer : Party
+    policyId : Text
+    maxTradeNotional : Decimal
+    allowedSellerParties : [Party]
+    allowedBuyerParties : [Party]
+    allowedJurisdictions : [Text]
+    lockPeriodHours : Int
+  where
+    signatory issuer
+
+    ensure
+      maxTradeNotional > 0.0
+      && lockPeriodHours >= 0
+      && policyId /= ""
+      && not (null allowedSellerParties)
+      && not (null allowedBuyerParties)
+      && not (null allowedJurisdictions)
+
+template DiscoveryInterest
+  with
+    issuer : Party
+    owner : Party
+    postingAgent : Party
+    discoverableBy : [Party]
+    instrument : Text
+    side : Side
+    strategyTag : Text
+    createdAt : Time
+    expiresAt : Time
+  where
+    signatory postingAgent
+    observer owner, issuer, discoverableBy
+
+    ensure expiresAt > createdAt
+
+    choice CancelInterest : ()
+      controller postingAgent
+      do
+        pure ()
+
+    choice ExpireInterest : ()
+      controller postingAgent
+      do
+        now <- getTime
+        assertMsg "Interest has not expired yet." (now >= expiresAt)
+        pure ()
+
+    choice RetireForMatch : ()
+      controller issuer
+      do
+        pure ()
+
+    choice MatchWith : ContractId PrivateNegotiation
+      with
+        counterpartyCid : ContractId DiscoveryInterest
+      controller issuer
+      do
+        now <- getTime
+        assertMsg "This interest has expired." (now < expiresAt)
+        let defaultExpiry = addRelTime now (hours 24)
+        counterparty <- fetch counterpartyCid
+        assertMsg "Counterparty interest has expired." (now < counterparty.expiresAt)
+        assertMsg "Interests must be for the same issuer." (counterparty.issuer == issuer)
+        assertMsg "Interests must target the same instrument." (counterparty.instrument == instrument)
+        assertMsg "Interests must be opposite sides." (counterparty.side /= side)
+        assertMsg "Self matching is not allowed." (counterparty.postingAgent /= postingAgent)
+        _ <- exercise counterpartyCid RetireForMatch
+        let sellerBundle =
+              case side of
+                Sell -> (owner, postingAgent, counterparty.owner, counterparty.postingAgent)
+                Buy -> (counterparty.owner, counterparty.postingAgent, owner, postingAgent)
+        let (sellerParty, sellerAgentParty, buyerParty, buyerAgentParty) = sellerBundle
+        create PrivateNegotiation
+          with
+            issuer
+            seller = sellerParty
+            sellerAgent = sellerAgentParty
+            buyer = buyerParty
+            buyerAgent = buyerAgentParty
+            instrument
+            createdAt = now
+            sellerJurisdiction = "UNSPECIFIED"
+            buyerJurisdiction = "UNSPECIFIED"
+            proposedQty = None
+            proposedUnitPrice = None
+            sellerAccepted = False
+            buyerAccepted = False
+            issuerApproved = False
+            expiresAt = defaultExpiry
+            sellerCommitmentHash = None
+            buyerCommitmentHash = None
+            sellerTermsRevealed = False
+            buyerTermsRevealed = False
+
+    choice MatchWithPolicyContext : ContractId PrivateNegotiation
+      with
+        counterpartyCid : ContractId DiscoveryInterest
+        sellerJurisdiction : Text
+        buyerJurisdiction : Text
+      controller issuer
+      do
+        assertMsg "sellerJurisdiction must not be empty." (sellerJurisdiction /= "")
+        assertMsg "buyerJurisdiction must not be empty." (buyerJurisdiction /= "")
+        now <- getTime
+        assertMsg "This interest has expired." (now < expiresAt)
+        let defaultExpiry = addRelTime now (hours 24)
+        counterparty <- fetch counterpartyCid
+        assertMsg "Counterparty interest has expired." (now < counterparty.expiresAt)
+        assertMsg "Interests must be for the same issuer." (counterparty.issuer == issuer)
+        assertMsg "Interests must target the same instrument." (counterparty.instrument == instrument)
+        assertMsg "Interests must be opposite sides." (counterparty.side /= side)
+        assertMsg "Self matching is not allowed." (counterparty.postingAgent /= postingAgent)
+        _ <- exercise counterpartyCid RetireForMatch
+        let sellerBundle =
+              case side of
+                Sell -> (owner, postingAgent, counterparty.owner, counterparty.postingAgent)
+                Buy -> (counterparty.owner, counterparty.postingAgent, owner, postingAgent)
+        let (sellerParty, sellerAgentParty, buyerParty, buyerAgentParty) = sellerBundle
+        create PrivateNegotiation
+          with
+            issuer
+            seller = sellerParty
+            sellerAgent = sellerAgentParty
+            buyer = buyerParty
+            buyerAgent = buyerAgentParty
+            instrument
+            createdAt = now
+            sellerJurisdiction
+            buyerJurisdiction
+            proposedQty = None
+            proposedUnitPrice = None
+            sellerAccepted = False
+            buyerAccepted = False
+            issuerApproved = False
+            expiresAt = defaultExpiry
+            sellerCommitmentHash = None
+            buyerCommitmentHash = None
+            sellerTermsRevealed = False
+            buyerTermsRevealed = False
+
+template CommittedTerms
+  with
+    issuer : Party
+    seller : Party
+    sellerAgent : Party
+    buyer : Party
+    buyerAgent : Party
+    instrument : Text
+    side : Side
+    committer : Party
+    commitmentHash : Text
+    committedAt : Time
+  where
+    signatory committer
+    observer issuer, seller, sellerAgent, buyer, buyerAgent
+
+    ensure commitmentHash /= ""
+
+template PrivateNegotiation
+  with
+    issuer : Party
+    seller : Party
+    sellerAgent : Party
+    buyer : Party
+    buyerAgent : Party
+    instrument : Text
+    createdAt : Time
+    sellerJurisdiction : Text
+    buyerJurisdiction : Text
+    proposedQty : Optional Decimal
+    proposedUnitPrice : Optional Decimal
+    sellerAccepted : Bool
+    buyerAccepted : Bool
+    issuerApproved : Bool
+    expiresAt : Time
+    sellerCommitmentHash : Optional Text
+    buyerCommitmentHash : Optional Text
+    sellerTermsRevealed : Bool
+    buyerTermsRevealed : Bool
+  where
+    signatory issuer
+    observer seller, sellerAgent, buyer, buyerAgent
+
+    choice SubmitSellerTerms : ContractId PrivateNegotiation
+      with
+        qty : Decimal
+        unitPrice : Decimal
+      controller sellerAgent
+      do
+        now <- getTime
+        assertMsg "Negotiation has expired." (now < expiresAt)
+        assertMsg "qty must be positive." (qty > 0.0)
+        assertMsg "unitPrice must be positive." (unitPrice > 0.0)
+        create this
+          with
+            proposedQty = Some qty
+            proposedUnitPrice = Some unitPrice
+            sellerAccepted = True
+            buyerAccepted = False
+            issuerApproved = False
+            sellerCommitmentHash = None
+            buyerCommitmentHash = None
+            sellerTermsRevealed = False
+            buyerTermsRevealed = False
+
+    choice SubmitBuyerTerms : ContractId PrivateNegotiation
+      with
+        qty : Decimal
+        unitPrice : Decimal
+      controller buyerAgent
+      do
+        now <- getTime
+        assertMsg "Negotiation has expired." (now < expiresAt)
+        assertMsg "qty must be positive." (qty > 0.0)
+        assertMsg "unitPrice must be positive." (unitPrice > 0.0)
+        create this
+          with
+            proposedQty = Some qty
+            proposedUnitPrice = Some unitPrice
+            sellerAccepted = False
+            buyerAccepted = True
+            issuerApproved = False
+            sellerCommitmentHash = None
+            buyerCommitmentHash = None
+            sellerTermsRevealed = False
+            buyerTermsRevealed = False
+
+    choice AcceptBySeller : ContractId PrivateNegotiation
+      controller sellerAgent
+      do
+        now <- getTime
+        assertMsg "Negotiation has expired." (now < expiresAt)
+        assertMsg "Cannot accept before terms exist." (isSome proposedQty && isSome proposedUnitPrice)
+        create this with sellerAccepted = True, issuerApproved = False
+
+    choice AcceptByBuyer : ContractId PrivateNegotiation
+      controller buyerAgent
+      do
+        now <- getTime
+        assertMsg "Negotiation has expired." (now < expiresAt)
+        assertMsg "Cannot accept before terms exist." (isSome proposedQty && isSome proposedUnitPrice)
+        create this with buyerAccepted = True, issuerApproved = False
+
+    choice CommitTerms : ContractId PrivateNegotiation
+      with
+        side : Side
+        commitmentHash : Text
+      controller partyForSide side sellerAgent buyerAgent
+      do
+        assertMsg "Cannot commit before terms exist." (isSome proposedQty && isSome proposedUnitPrice)
+        assertMsg "commitmentHash must not be empty." (commitmentHash /= "")
+        now <- getTime
+        let committer = partyForSide side sellerAgent buyerAgent
+        _ <- create CommittedTerms
+          with
+            issuer
+            seller
+            sellerAgent
+            buyer
+            buyerAgent
+            instrument
+            side
+            committer
+            commitmentHash
+            committedAt = now
+
+        case side of
+          Sell -> create this with sellerCommitmentHash = Some commitmentHash, sellerTermsRevealed = False, issuerApproved = False
+          Buy -> create this with buyerCommitmentHash = Some commitmentHash, buyerTermsRevealed = False, issuerApproved = False
+
+    choice RevealTerms : ContractId PrivateNegotiation
+      with
+        side : Side
+        qtyText : Text
+        unitPriceText : Text
+        salt : Text
+      controller partyForSide side sellerAgent buyerAgent
+      do
+        assertMsg "Cannot reveal before terms exist." (isSome proposedQty && isSome proposedUnitPrice)
+        let parsedQty = parseDecimal qtyText
+        let parsedUnitPrice = parseDecimal unitPriceText
+        assertMsg "qtyText is not a valid decimal." (isSome parsedQty)
+        assertMsg "unitPriceText is not a valid decimal." (isSome parsedUnitPrice)
+        assertMsg "Revealed qty does not match negotiated terms." (fromSome parsedQty == fromSome proposedQty)
+        assertMsg "Revealed unitPrice does not match negotiated terms." (fromSome parsedUnitPrice == fromSome proposedUnitPrice)
+        let expectedHash = commitmentHashFromTerms qtyText unitPriceText salt
+
+        case side of
+          Sell -> do
+            assertMsg "Seller has not committed term hash yet." (isSome sellerCommitmentHash)
+            assertMsg "Seller reveal hash mismatch." (fromSome sellerCommitmentHash == expectedHash)
+            create this with sellerTermsRevealed = True, issuerApproved = False
+          Buy -> do
+            assertMsg "Buyer has not committed term hash yet." (isSome buyerCommitmentHash)
+            assertMsg "Buyer reveal hash mismatch." (fromSome buyerCommitmentHash == expectedHash)
+            create this with buyerTermsRevealed = True, issuerApproved = False
+
+    choice RejectBySeller : ()
+      controller sellerAgent
+      do
+        pure ()
+
+    choice RejectByBuyer : ()
+      controller buyerAgent
+      do
+        pure ()
+
+    choice ExpireNegotiation : ()
+      controller issuer
+      do
+        now <- getTime
+        assertMsg "Negotiation has not expired yet." (now >= expiresAt)
+        pure ()
+
+    choice ApproveMatch : ContractId PrivateNegotiation
+      controller issuer
+      do
+        assertMsg "Both sides must accept terms before issuer approval."
+          (sellerAccepted && buyerAccepted)
+        assertMsg "Terms must exist before issuer approval."
+          (isSome proposedQty && isSome proposedUnitPrice)
+        assertMsg "Both parties must commit term hashes."
+          (isSome sellerCommitmentHash && isSome buyerCommitmentHash)
+        assertMsg "Both parties must reveal committed terms before issuer approval."
+          (sellerTermsRevealed && buyerTermsRevealed)
+        create this with issuerApproved = True
+
+    choice ApproveMatchWithPolicy : ContractId PrivateNegotiation
+      with
+        policyCid : ContractId CompliancePolicy
+      controller issuer
+      do
+        assertMsg "Both sides must accept terms before issuer approval."
+          (sellerAccepted && buyerAccepted)
+        assertMsg "Terms must exist before issuer approval."
+          (isSome proposedQty && isSome proposedUnitPrice)
+        assertMsg "Both parties must commit term hashes."
+          (isSome sellerCommitmentHash && isSome buyerCommitmentHash)
+        assertMsg "Both parties must reveal committed terms before issuer approval."
+          (sellerTermsRevealed && buyerTermsRevealed)
+        assertMsg "Seller jurisdiction must be populated for policy checks."
+          (sellerJurisdiction /= "")
+        assertMsg "Buyer jurisdiction must be populated for policy checks."
+          (buyerJurisdiction /= "")
+        policy <- fetch policyCid
+        assertMsg "Compliance policy issuer mismatch." (policy.issuer == issuer)
+        assertMsg "Seller is not on policy whitelist." (elem seller policy.allowedSellerParties)
+        assertMsg "Buyer is not on policy whitelist." (elem buyer policy.allowedBuyerParties)
+        assertMsg "Seller jurisdiction is not allowed by policy."
+          (elem sellerJurisdiction policy.allowedJurisdictions)
+        assertMsg "Buyer jurisdiction is not allowed by policy."
+          (elem buyerJurisdiction policy.allowedJurisdictions)
+        let finalQty = fromSome proposedQty
+        let finalUnitPrice = fromSome proposedUnitPrice
+        let notional = finalQty * finalUnitPrice
+        assertMsg "Trade notional exceeds policy threshold."
+          (notional <= policy.maxTradeNotional)
+        now <- getTime
+        let lockExpiresAt = addRelTime createdAt (hours policy.lockPeriodHours)
+        assertMsg "Policy lock period has not elapsed yet." (now >= lockExpiresAt)
+        create this with issuerApproved = True
+
+    choice StartSettlement : ContractId TradeSettlement
+      controller issuer
+      do
+        assertMsg "Issuer must approve match first." issuerApproved
+        let finalQty = fromSome proposedQty
+        let finalUnitPrice = fromSome proposedUnitPrice
+        create TradeSettlement
+          with
+            issuer
+            seller
+            sellerAgent
+            buyer
+            buyerAgent
+            instrument
+            quantity = finalQty
+            unitPrice = finalUnitPrice
+            rofrApproved = issuerApproved
+            settled = False
+
+template TradeSettlement
+  with
+    issuer : Party
+    seller : Party
+    sellerAgent : Party
+    buyer : Party
+    buyerAgent : Party
+    instrument : Text
+    quantity : Decimal
+    unitPrice : Decimal
+    rofrApproved : Bool
+    settled : Bool
+  where
+    signatory issuer
+    observer seller, sellerAgent, buyer, buyerAgent
+
+    ensure quantity > 0.0 && unitPrice > 0.0
+
+    choice FinalizeSettlement : ContractId TradeSettlement
+      with
+        sellerAssetCid : ContractId AssetHolding
+        buyerCashCid : ContractId CashHolding
+      controller issuer
+      do
+        assertMsg "Already settled." (not settled)
+        assertMsg "ROFR/compliance approval is required." rofrApproved
+        now <- getTime
+        sellerAsset <- fetch sellerAssetCid
+        assertMsg "Asset instrument mismatch." (sellerAsset.instrument == instrument)
+        assertMsg "Asset owner must be seller." (sellerAsset.owner == seller)
+        assertMsg "Asset quantity insufficient." (sellerAsset.quantity >= quantity)
+        buyerCash <- fetch buyerCashCid
+        let totalCost = quantity * unitPrice
+        assertMsg "Cash amount insufficient." (buyerCash.amount >= totalCost)
+        assertMsg "Cash owner must be buyer." (buyerCash.owner == buyer)
+        archive sellerAssetCid
+        archive buyerCashCid
+        _ <- create AssetHolding with owner = buyer, issuer, instrument, quantity
+        _ <- create CashHolding with owner = seller, issuer, currency = buyerCash.currency, amount = totalCost
+        when (sellerAsset.quantity > quantity) do
+          _ <- create AssetHolding with owner = seller, issuer, instrument, quantity = sellerAsset.quantity - quantity
+          pure ()
+        when (buyerCash.amount > totalCost) do
+          _ <- create CashHolding with owner = buyer, issuer, currency = buyerCash.currency, amount = buyerCash.amount - totalCost
+          pure ()
+        _ <- create TradeAuditRecord
+          with
+            issuer; seller; buyer; sellerAgent; buyerAgent; instrument; quantity; unitPrice
+            settledAt = now
+        create this with settled = True
+
+    choice SimpleFinalizeSettlement : ContractId TradeSettlement
+      controller issuer
+      do
+        assertMsg "Already settled." (not settled)
+        assertMsg "ROFR/compliance approval is required." rofrApproved
+        now <- getTime
+        _ <- create TradeAuditRecord
+          with
+            issuer; seller; buyer; sellerAgent; buyerAgent; instrument; quantity; unitPrice
+            settledAt = now
+        create this with settled = True
+
+template TradeAuditRecord
+  with
+    issuer : Party
+    seller : Party
+    buyer : Party
+    sellerAgent : Party
+    buyerAgent : Party
+    instrument : Text
+    quantity : Decimal
+    unitPrice : Decimal
+    settledAt : Time
+  where
+    signatory issuer
+    observer seller, buyer, sellerAgent, buyerAgent
+
+template AgentDecisionLog
+  with
+    agent : Party
+    owner : Party
+    instrument : Text
+    decision : Text
+    reasoning : Text
+    timestamp : Text
+    marketContext : Text
+  where
+    signatory agent
+    observer owner

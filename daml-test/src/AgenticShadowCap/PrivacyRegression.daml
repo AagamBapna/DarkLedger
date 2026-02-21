@@ -1,0 +1,304 @@
+module AgenticShadowCap.PrivacyRegression where
+
+import Daml.Script
+import DA.Assert ((===))
+import DA.Time (addRelTime, hours)
+
+import AgenticShadowCap.Market
+
+data VisibilitySnapshot = VisibilitySnapshot
+  with
+    compliancePolicies : Int
+    assetHoldings : Int
+    cashHoldings : Int
+    tradeIntents : Int
+    discoveryInterests : Int
+    privateNegotiations : Int
+    committedTerms : Int
+    settlements : Int
+    audits : Int
+  deriving (Eq, Show)
+
+data Parties = Parties
+  with
+    seller : Party
+    sellerAgent : Party
+    buyer : Party
+    buyerAgent : Party
+    issuer : Party
+    outsider : Party
+
+setupParties : Script Parties
+setupParties = do
+  seller <- allocatePartyByHint (PartyIdHint "Seller")
+  sellerAgent <- allocatePartyByHint (PartyIdHint "SellerAgent")
+  buyer <- allocatePartyByHint (PartyIdHint "Buyer")
+  buyerAgent <- allocatePartyByHint (PartyIdHint "BuyerAgent")
+  issuer <- allocatePartyByHint (PartyIdHint "Company")
+  outsider <- allocatePartyByHint (PartyIdHint "Outsider")
+  pure Parties with seller, sellerAgent, buyer, buyerAgent, issuer, outsider
+
+commitAndRevealTerms :
+  Party ->
+  Party ->
+  ContractId PrivateNegotiation ->
+  Text ->
+  Text ->
+  Script (ContractId PrivateNegotiation)
+commitAndRevealTerms sellerAgent buyerAgent negotiationCid qtyText unitPriceText = do
+  let sellerSalt = "privacy-proof-seller-salt"
+  let buyerSalt = "privacy-proof-buyer-salt"
+  let sellerHash = commitmentHashFromTerms qtyText unitPriceText sellerSalt
+  let buyerHash = commitmentHashFromTerms qtyText unitPriceText buyerSalt
+
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid CommitTerms with side = Sell, commitmentHash = sellerHash
+  negotiationCid <- submit buyerAgent do
+    exerciseCmd negotiationCid CommitTerms with side = Buy, commitmentHash = buyerHash
+  negotiationCid <- submit sellerAgent do
+    exerciseCmd negotiationCid RevealTerms with
+      side = Sell
+      qtyText
+      unitPriceText
+      salt = sellerSalt
+  submit buyerAgent do
+    exerciseCmd negotiationCid RevealTerms with
+      side = Buy
+      qtyText
+      unitPriceText
+      salt = buyerSalt
+
+snapshotFor : Party -> Script VisibilitySnapshot
+snapshotFor party = do
+  policies <- query @CompliancePolicy party
+  assets <- query @AssetHolding party
+  cash <- query @CashHolding party
+  intents <- query @TradeIntent party
+  interests <- query @DiscoveryInterest party
+  negotiations <- query @PrivateNegotiation party
+  commitments <- query @CommittedTerms party
+  settlements <- query @TradeSettlement party
+  audits <- query @TradeAuditRecord party
+  pure VisibilitySnapshot
+    with
+      compliancePolicies = length policies
+      assetHoldings = length assets
+      cashHoldings = length cash
+      tradeIntents = length intents
+      discoveryInterests = length interests
+      privateNegotiations = length negotiations
+      committedTerms = length commitments
+      settlements = length settlements
+      audits = length audits
+
+testPrivacyVisibilityMatrixRegression : Script ()
+testPrivacyVisibilityMatrixRegression = script do
+  parties <- setupParties
+  let seller = parties.seller
+  let sellerAgent = parties.sellerAgent
+  let buyer = parties.buyer
+  let buyerAgent = parties.buyerAgent
+  let issuer = parties.issuer
+  let outsider = parties.outsider
+  now <- getTime
+
+  policyCid <- submit issuer do
+    createCmd CompliancePolicy with
+      issuer
+      policyId = "PRIVACY_REGRESSION_BASELINE"
+      maxTradeNotional = 250000.0
+      allowedSellerParties = [seller]
+      allowedBuyerParties = [buyer]
+      allowedJurisdictions = ["US"]
+      lockPeriodHours = 0
+
+  _ <- submit issuer do
+    createCmd AssetHolding with
+      owner = seller
+      issuer
+      instrument = "COMPANY-SERIES-A"
+      quantity = 2000.0
+
+  _ <- submit issuer do
+    createCmd CashHolding with
+      owner = buyer
+      issuer
+      currency = "USD"
+      amount = 300000.0
+
+  _ <- submit seller do
+    createCmd TradeIntent with
+      issuer
+      seller
+      sellerAgent
+      instrument = "COMPANY-SERIES-A"
+      quantity = 1200.0
+      minPrice = 95.0
+
+  sellSettleCid <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer
+      owner = seller
+      postingAgent = sellerAgent
+      discoverableBy = [buyerAgent]
+      instrument = "COMPANY-SERIES-A"
+      side = Sell
+      strategyTag = "PRIVACY_SETTLE_SELL"
+      createdAt = now
+      expiresAt = addRelTime now (hours 2)
+
+  buySettleCid <- submit buyerAgent do
+    createCmd DiscoveryInterest with
+      issuer
+      owner = buyer
+      postingAgent = buyerAgent
+      discoverableBy = [sellerAgent]
+      instrument = "COMPANY-SERIES-A"
+      side = Buy
+      strategyTag = "PRIVACY_SETTLE_BUY"
+      createdAt = now
+      expiresAt = addRelTime now (hours 2)
+
+  negotiationSettleCid <- submit issuer do
+    exerciseCmd sellSettleCid MatchWithPolicyContext with
+      counterpartyCid = buySettleCid
+      sellerJurisdiction = "US"
+      buyerJurisdiction = "US"
+
+  negotiationSettleCid <- submit sellerAgent do
+    exerciseCmd negotiationSettleCid SubmitSellerTerms with qty = 900.0, unitPrice = 100.0
+  negotiationSettleCid <- submit buyerAgent do
+    exerciseCmd negotiationSettleCid AcceptByBuyer
+  negotiationSettleCid <- submit sellerAgent do
+    exerciseCmd negotiationSettleCid AcceptBySeller
+  negotiationSettleCid <- commitAndRevealTerms sellerAgent buyerAgent negotiationSettleCid "900.0" "100.0"
+  negotiationSettleCid <- submit issuer do
+    exerciseCmd negotiationSettleCid ApproveMatchWithPolicy with policyCid
+  settlementCid <- submit issuer do
+    exerciseCmd negotiationSettleCid StartSettlement
+  _ <- submit issuer do
+    exerciseCmd settlementCid SimpleFinalizeSettlement
+
+  sellActiveCid <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer
+      owner = seller
+      postingAgent = sellerAgent
+      discoverableBy = [buyerAgent]
+      instrument = "COMPANY-SERIES-A"
+      side = Sell
+      strategyTag = "PRIVACY_ACTIVE_NEGOTIATION_SELL"
+      createdAt = now
+      expiresAt = addRelTime now (hours 2)
+
+  buyActiveCid <- submit buyerAgent do
+    createCmd DiscoveryInterest with
+      issuer
+      owner = buyer
+      postingAgent = buyerAgent
+      discoverableBy = [sellerAgent]
+      instrument = "COMPANY-SERIES-A"
+      side = Buy
+      strategyTag = "PRIVACY_ACTIVE_NEGOTIATION_BUY"
+      createdAt = now
+      expiresAt = addRelTime now (hours 2)
+
+  negotiationActiveCid <- submit issuer do
+    exerciseCmd sellActiveCid MatchWithPolicyContext with
+      counterpartyCid = buyActiveCid
+      sellerJurisdiction = "US"
+      buyerJurisdiction = "US"
+  _ <- submit sellerAgent do
+    exerciseCmd negotiationActiveCid SubmitSellerTerms with qty = 250.0, unitPrice = 99.0
+
+  _ <- submit sellerAgent do
+    createCmd DiscoveryInterest with
+      issuer
+      owner = seller
+      postingAgent = sellerAgent
+      discoverableBy = [buyerAgent]
+      instrument = "COMPANY-SERIES-A"
+      side = Sell
+      strategyTag = "PRIVACY_UNMATCHED_SIGNAL"
+      createdAt = now
+      expiresAt = addRelTime now (hours 2)
+
+  sellerSnapshot <- snapshotFor seller
+  sellerSnapshot === VisibilitySnapshot
+    with
+      compliancePolicies = 0
+      assetHoldings = 1
+      cashHoldings = 0
+      tradeIntents = 1
+      discoveryInterests = 1
+      privateNegotiations = 1
+      committedTerms = 2
+      settlements = 1
+      audits = 1
+
+  sellerAgentSnapshot <- snapshotFor sellerAgent
+  sellerAgentSnapshot === VisibilitySnapshot
+    with
+      compliancePolicies = 0
+      assetHoldings = 0
+      cashHoldings = 0
+      tradeIntents = 1
+      discoveryInterests = 1
+      privateNegotiations = 1
+      committedTerms = 2
+      settlements = 1
+      audits = 1
+
+  buyerSnapshot <- snapshotFor buyer
+  buyerSnapshot === VisibilitySnapshot
+    with
+      compliancePolicies = 0
+      assetHoldings = 0
+      cashHoldings = 1
+      tradeIntents = 0
+      discoveryInterests = 0
+      privateNegotiations = 1
+      committedTerms = 2
+      settlements = 1
+      audits = 1
+
+  buyerAgentSnapshot <- snapshotFor buyerAgent
+  buyerAgentSnapshot === VisibilitySnapshot
+    with
+      compliancePolicies = 0
+      assetHoldings = 0
+      cashHoldings = 0
+      tradeIntents = 0
+      discoveryInterests = 1
+      privateNegotiations = 1
+      committedTerms = 2
+      settlements = 1
+      audits = 1
+
+  issuerSnapshot <- snapshotFor issuer
+  issuerSnapshot === VisibilitySnapshot
+    with
+      compliancePolicies = 1
+      assetHoldings = 1
+      cashHoldings = 1
+      tradeIntents = 1
+      discoveryInterests = 1
+      privateNegotiations = 1
+      committedTerms = 2
+      settlements = 1
+      audits = 1
+
+  outsiderSnapshot <- snapshotFor outsider
+  outsiderSnapshot === VisibilitySnapshot
+    with
+      compliancePolicies = 0
+      assetHoldings = 0
+      cashHoldings = 0
+      tradeIntents = 0
+      discoveryInterests = 0
+      privateNegotiations = 0
+      committedTerms = 0
+      settlements = 0
+      audits = 0
+
+  pure ()
