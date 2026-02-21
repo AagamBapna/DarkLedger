@@ -86,6 +86,11 @@ function isValidPositiveNumber(value: string): boolean {
   return Number.isFinite(parsed) && parsed > 0;
 }
 
+function isLockedContractError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("local_verdict_locked_contracts") || lower.includes("locked contracts");
+}
+
 const NEGOTIATION_FIELD_CHOICES = ["SubmitSellerTerms", "SubmitBuyerTerms", "CommitTerms", "RevealTerms"];
 
 function normalizeInstrument(value: string): string {
@@ -117,6 +122,10 @@ function isFullyAccepted(payload: PrivateNegotiationPayload): boolean {
 
 function isAcceptedByEither(payload: PrivateNegotiationPayload): boolean {
   return payload.sellerAccepted || payload.buyerAccepted;
+}
+
+function isNegotiationClosed(payload: PrivateNegotiationPayload): boolean {
+  return isFullyAccepted(payload);
 }
 
 function hasSubmittedTerms(payload: PrivateNegotiationPayload): boolean {
@@ -160,6 +169,7 @@ export default function App() {
   const [outsiderNegotiations, setOutsiderNegotiations] = useState<Array<ContractRecord<PrivateNegotiationPayload>>>([]);
   const [outsiderSettlements, setOutsiderSettlements] = useState<Array<ContractRecord<TradeSettlementPayload>>>([]);
   const [outsiderAudits, setOutsiderAudits] = useState<Array<ContractRecord<TradeAuditRecordPayload>>>([]);
+  const [sessionClosedInstruments, setSessionClosedInstruments] = useState<string[]>([]);
   const outsiderAcceptedBaselineRef = useRef<number | null>(null);
 
   const seller = useMemo(() => resolveAlias(availableParties, "Seller"), [availableParties]);
@@ -184,25 +194,49 @@ export default function App() {
   const [negotiationSalt, setNegotiationSalt] = useState("simple-demo-salt");
   const startupResetDone = useRef(false);
 
+  const sessionClosedInstrumentSet = useMemo(
+    () => new Set(sessionClosedInstruments),
+    [sessionClosedInstruments],
+  );
+
   const sellerNegotiationsForSelection = useMemo(
-    () => collapseNegotiationLanes(sellerNegotiations.filter((row) => !isAcceptedByEither(row.payload))),
-    [sellerNegotiations],
+    () => collapseNegotiationLanes(sellerNegotiations.filter((row) =>
+      !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)))),
+    [sellerNegotiations, sessionClosedInstrumentSet],
   );
 
   const buyerNegotiationsCollapsed = useMemo(
-    () => collapseNegotiationLanes(buyerNegotiations.filter((row) => !isAcceptedByEither(row.payload))),
-    [buyerNegotiations],
+    () => collapseNegotiationLanes(buyerNegotiations.filter((row) =>
+      !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)))),
+    [buyerNegotiations, sessionClosedInstrumentSet],
   );
 
   const acceptedForOutsider = useMemo(
-    () => collapseNegotiationLanes(companyNegotiations).filter((row) => isAcceptedByEither(row.payload)),
+    () => companyNegotiations.filter((row) => isNegotiationClosed(row.payload)),
     [companyNegotiations],
+  );
+  const acceptedLedgerInstrumentSet = useMemo(
+    () => new Set(acceptedForOutsider.map((row) => normalizeInstrument(row.payload.instrument))),
+    [acceptedForOutsider],
+  );
+  const sessionOnlyClosedCount = useMemo(
+    () => sessionClosedInstruments.filter((instrument) => !acceptedLedgerInstrumentSet.has(instrument)).length,
+    [acceptedLedgerInstrumentSet, sessionClosedInstruments],
+  );
+  const sessionOnlyClosedInstruments = useMemo(
+    () => sessionClosedInstruments.filter((instrument) => !acceptedLedgerInstrumentSet.has(instrument)),
+    [acceptedLedgerInstrumentSet, sessionClosedInstruments],
+  );
+  const completedTotalDisplay = acceptedForOutsider.length + sessionOnlyClosedCount;
+  const closedInstrumentSet = useMemo(
+    () => new Set([...acceptedLedgerInstrumentSet, ...sessionClosedInstruments]),
+    [acceptedLedgerInstrumentSet, sessionClosedInstruments],
   );
   const newAcceptedSinceLoad = useMemo(() => {
     const baseline = outsiderAcceptedBaselineRef.current;
-    if (baseline === null) return 0;
-    return Math.max(0, acceptedForOutsider.length - baseline);
-  }, [acceptedForOutsider.length]);
+    const ledgerDelta = baseline === null ? 0 : Math.max(0, acceptedForOutsider.length - baseline);
+    return ledgerDelta + sessionOnlyClosedCount;
+  }, [acceptedForOutsider.length, sessionOnlyClosedCount]);
 
   const selectedSellerNegotiation = useMemo(
     () => sellerNegotiationsForSelection.find((row) => row.contractId === sellerNegotiationCid)
@@ -272,8 +306,8 @@ export default function App() {
       setBuyerNegotiations(buyerNeg);
       setCompanyNegotiations(companyNeg);
       if (outsiderAcceptedBaselineRef.current === null) {
-        outsiderAcceptedBaselineRef.current = collapseNegotiationLanes(companyNeg)
-          .filter((row) => isAcceptedByEither(row.payload))
+        outsiderAcceptedBaselineRef.current = companyNeg
+          .filter((row) => isNegotiationClosed(row.payload))
           .length;
       }
       setOutsiderIntents(outIntents);
@@ -315,7 +349,7 @@ export default function App() {
     return () => {};
   }, [refreshLedger, seller]);
 
-  const runAction = useCallback(async (description: string, action: () => Promise<void>) => {
+  const runAction = useCallback(async (description: string, action: () => Promise<void>): Promise<boolean> => {
     setBusy(true);
     setStatus(null);
     setError(null);
@@ -323,13 +357,22 @@ export default function App() {
       await action();
       setStatus(description);
       await refreshLedger();
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await refreshLedger();
+      return true;
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       setError(message);
+      return false;
     } finally {
       setBusy(false);
     }
   }, [refreshLedger]);
+
+  const markInstrumentClosed = useCallback((instrumentName: string) => {
+    const normalized = normalizeInstrument(instrumentName);
+    setSessionClosedInstruments((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]));
+  }, []);
 
   const createTradeIntent = useCallback(async () => {
     await runAction("Trade intent created.", async () => {
@@ -374,37 +417,65 @@ export default function App() {
     return {};
   }, [negotiationPrice, negotiationQty, negotiationSalt, negotiationSide]);
 
-  const runSellerAction = useCallback(async (choice?: SellerChoice) => {
+  const pickActiveNegotiation = useCallback((
+    rows: Array<ContractRecord<PrivateNegotiationPayload>>,
+    preferredContractId: string,
+    preferredInstrument?: string | null,
+  ): ContractRecord<PrivateNegotiationPayload> | null => {
+    const activeRows = rows.filter((row) =>
+      !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)));
+    if (!activeRows.length) return null;
+    const byCid = activeRows.find((row) => row.contractId === preferredContractId);
+    if (byCid) return byCid;
+    if (preferredInstrument) {
+      const normalized = normalizeInstrument(preferredInstrument);
+      const byInstrument = activeRows.find((row) => normalizeInstrument(row.payload.instrument) === normalized);
+      if (byInstrument) return byInstrument;
+    }
+    return activeRows[0] ?? null;
+  }, [sessionClosedInstrumentSet]);
+
+  const runSellerAction = useCallback(async (choice?: SellerChoice): Promise<boolean> => {
     const effectiveChoice = choice ?? sellerChoice;
 
     if (NEGOTIATION_FIELD_CHOICES.includes(effectiveChoice)) {
       if (!isValidPositiveNumber(negotiationQty) || !isValidPositiveNumber(negotiationPrice)) {
         setError("Enter valid positive qty and unit price before negotiating.");
-        return;
+        return false;
       }
     }
 
-    await runAction(`Seller action ${effectiveChoice} executed.`, async () => {
-      const liveRows = await queryPrivateNegotiations(sellerAgent);
-      setSellerNegotiations(liveRows);
-      const live = liveRows.find((row) => row.contractId === sellerNegotiationCid)
-        ?? liveRows.find((row) =>
-          selectedSellerNegotiation
-          && normalizeInstrument(row.payload.instrument) === normalizeInstrument(selectedSellerNegotiation.payload.instrument))
-        ?? liveRows[0]
-        ?? null;
+    return runAction(`Seller action ${effectiveChoice} executed.`, async () => {
+      const maxAttempts = 3;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const liveRows = await queryPrivateNegotiations(sellerAgent);
+        setSellerNegotiations(liveRows);
+        const live = pickActiveNegotiation(
+          liveRows,
+          sellerNegotiationCid,
+          selectedSellerNegotiation?.payload.instrument ?? null,
+        );
+        if (!live) throw new Error("No active seller-side negotiation available (it may already be accepted).");
+        setSellerNegotiationCid(live.contractId);
 
-      if (!live) throw new Error("No seller-side negotiation contract available yet.");
-      setSellerNegotiationCid(live.contractId);
-
-      const arg = await negotiationArgument(effectiveChoice);
-      await exerciseChoice(
-        sellerAgent,
-        TEMPLATE_IDS.privateNegotiation,
-        live.contractId,
-        effectiveChoice,
-        arg,
-      );
+        const arg = await negotiationArgument(effectiveChoice);
+        try {
+          await exerciseChoice(
+            sellerAgent,
+            TEMPLATE_IDS.privateNegotiation,
+            live.contractId,
+            effectiveChoice,
+            arg,
+          );
+          return;
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : String(reason);
+          if (!isLockedContractError(message) || attempt === maxAttempts - 1) {
+            throw reason;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+        }
+      }
     });
   }, [
     sellerChoice,
@@ -415,39 +486,50 @@ export default function App() {
     sellerAgent,
     sellerNegotiationCid,
     selectedSellerNegotiation,
+    pickActiveNegotiation,
   ]);
 
-  const runBuyerAction = useCallback(async (choice?: BuyerChoice) => {
+  const runBuyerAction = useCallback(async (choice?: BuyerChoice): Promise<boolean> => {
     const effectiveChoice = choice ?? buyerChoice;
 
     if (NEGOTIATION_FIELD_CHOICES.includes(effectiveChoice)) {
       if (!isValidPositiveNumber(negotiationQty) || !isValidPositiveNumber(negotiationPrice)) {
         setError("Enter valid positive qty and unit price before negotiating.");
-        return;
+        return false;
       }
     }
 
-    await runAction(`Buyer action ${effectiveChoice} executed.`, async () => {
-      const liveRows = await queryPrivateNegotiations(buyerAgent);
-      setBuyerNegotiations(liveRows);
-      const live = liveRows.find((row) => row.contractId === buyerNegotiationCid)
-        ?? liveRows.find((row) =>
-          selectedBuyerNegotiation
-          && normalizeInstrument(row.payload.instrument) === normalizeInstrument(selectedBuyerNegotiation.payload.instrument))
-        ?? liveRows[0]
-        ?? null;
+    return runAction(`Buyer action ${effectiveChoice} executed.`, async () => {
+      const maxAttempts = 3;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const liveRows = await queryPrivateNegotiations(buyerAgent);
+        setBuyerNegotiations(liveRows);
+        const live = pickActiveNegotiation(
+          liveRows,
+          buyerNegotiationCid,
+          selectedBuyerNegotiation?.payload.instrument ?? null,
+        );
+        if (!live) throw new Error("No active buyer-side negotiation available (it may already be accepted).");
+        setBuyerNegotiationCid(live.contractId);
 
-      if (!live) throw new Error("No buyer-side negotiation contract available yet.");
-      setBuyerNegotiationCid(live.contractId);
-
-      const arg = await negotiationArgument(effectiveChoice);
-      await exerciseChoice(
-        buyerAgent,
-        TEMPLATE_IDS.privateNegotiation,
-        live.contractId,
-        effectiveChoice,
-        arg,
-      );
+        const arg = await negotiationArgument(effectiveChoice);
+        try {
+          await exerciseChoice(
+            buyerAgent,
+            TEMPLATE_IDS.privateNegotiation,
+            live.contractId,
+            effectiveChoice,
+            arg,
+          );
+          return;
+        } catch (reason) {
+          const message = reason instanceof Error ? reason.message : String(reason);
+          if (!isLockedContractError(message) || attempt === maxAttempts - 1) {
+            throw reason;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+        }
+      }
     });
   }, [
     buyerChoice,
@@ -458,22 +540,54 @@ export default function App() {
     buyerAgent,
     buyerNegotiationCid,
     selectedBuyerNegotiation,
+    pickActiveNegotiation,
   ]);
 
   const runBuyerNegotiate = useCallback(async () => {
     await runBuyerAction("SubmitBuyerTerms");
   }, [runBuyerAction]);
 
+  const runSellerNegotiate = useCallback(async () => {
+    await runSellerAction("SubmitSellerTerms");
+  }, [runSellerAction]);
+
+  const runSellerAcceptOffer = useCallback(async () => {
+    if (!selectedSellerNegotiation) {
+      setError("No seller-side negotiation contract available yet.");
+      return;
+    }
+    if (selectedSellerNegotiation.payload.sellerAccepted) {
+      setError("Seller already accepted these terms.");
+      return;
+    }
+    if (!hasSubmittedTerms(selectedSellerNegotiation.payload)) {
+      const submitted = await runSellerAction("SubmitSellerTerms");
+      if (!submitted) return;
+    }
+    const accepted = await runSellerAction("AcceptBySeller");
+    if (accepted) {
+      markInstrumentClosed(selectedSellerNegotiation.payload.instrument);
+    }
+  }, [markInstrumentClosed, runSellerAction, selectedSellerNegotiation]);
+
   const runBuyerAcceptOffer = useCallback(async () => {
     if (!selectedBuyerNegotiation) {
       setError("No buyer-side negotiation contract available yet.");
       return;
     }
-    if (!hasSubmittedTerms(selectedBuyerNegotiation.payload)) {
-      await runBuyerAction("SubmitBuyerTerms");
+    if (selectedBuyerNegotiation.payload.buyerAccepted) {
+      setError("Buyer already accepted these terms.");
+      return;
     }
-    await runBuyerAction("AcceptByBuyer");
-  }, [runBuyerAction, selectedBuyerNegotiation]);
+    if (!hasSubmittedTerms(selectedBuyerNegotiation.payload)) {
+      const submitted = await runBuyerAction("SubmitBuyerTerms");
+      if (!submitted) return;
+    }
+    const accepted = await runBuyerAction("AcceptByBuyer");
+    if (accepted) {
+      markInstrumentClosed(selectedBuyerNegotiation.payload.instrument);
+    }
+  }, [markInstrumentClosed, runBuyerAction, selectedBuyerNegotiation]);
 
   const runBuyerNegotiateFromIntent = useCallback(async (intent: ContractRecord<TradeIntentPayload>) => {
     const qty = optionalToNumber(intent.payload.quantity);
@@ -492,7 +606,16 @@ export default function App() {
       const liveRows = await queryPrivateNegotiations(buyerAgent);
       setBuyerNegotiations(liveRows);
       const normalizedInstrument = normalizeInstrument(intent.payload.instrument);
-      const activeRows = liveRows.filter((row) => !isAcceptedByEither(row.payload));
+      if (closedInstrumentSet.has(normalizedInstrument)) {
+        throw new Error("This intent already has an accepted offer. Negotiation is closed.");
+      }
+      const closedRows = liveRows.filter((row) =>
+        isNegotiationClosed(row.payload) && normalizeInstrument(row.payload.instrument) === normalizedInstrument);
+      if (closedRows.length > 0) {
+        throw new Error("This intent already has an accepted offer. Negotiation is closed.");
+      }
+      const activeRows = liveRows.filter((row) =>
+        !isNegotiationClosed(row.payload) && !sessionClosedInstrumentSet.has(normalizeInstrument(row.payload.instrument)));
       const match = activeRows.find(
         (row) => normalizeInstrument(row.payload.instrument) === normalizedInstrument,
       ) ?? null;
@@ -566,10 +689,7 @@ export default function App() {
         setBuyerNegotiationCid(match.contractId);
       }
     });
-  }, [buyer, buyerAgent, company, runAction, seller, sellerAgent]);
-
-  const showSellerFields = NEGOTIATION_FIELD_CHOICES.includes(sellerChoice);
-  const showBuyerFields = NEGOTIATION_FIELD_CHOICES.includes(buyerChoice);
+  }, [buyer, buyerAgent, closedInstrumentSet, company, runAction, seller, sellerAgent, sessionClosedInstrumentSet]);
 
   const outsiderPrivateCount = outsiderIntents.length + outsiderNegotiations.length;
   const outsiderPublicCount = outsiderSettlements.length + outsiderAudits.length;
@@ -580,8 +700,12 @@ export default function App() {
     if (qty === null || price === null) return "No price/qty terms submitted yet.";
     return `Qty ${qty} @ ${price}`;
   };
-  const sellerCanAccept = selectedSellerNegotiation ? hasSubmittedTerms(selectedSellerNegotiation.payload) : false;
-  const buyerCanAccept = Boolean(selectedBuyerNegotiation);
+  const sellerCanAccept = selectedSellerNegotiation
+    ? !selectedSellerNegotiation.payload.sellerAccepted
+    : false;
+  const buyerCanAccept = selectedBuyerNegotiation
+    ? !selectedBuyerNegotiation.payload.buyerAccepted
+    : false;
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 md:px-8">
@@ -713,75 +837,36 @@ export default function App() {
               <p className="mt-3 text-sm text-signal-slate">No seller-visible negotiations yet.</p>
             )}
 
-            <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-              Seller Action
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                value={sellerChoice}
-                onChange={(event) => setSellerChoice(event.target.value as SellerChoice)}
-              >
-                <option value="SubmitSellerTerms">SubmitSellerTerms</option>
-                <option value="CommitTerms">CommitTerms</option>
-                <option value="RevealTerms">RevealTerms</option>
-                <option value="AcceptBySeller">AcceptBySeller</option>
-                <option value="RejectBySeller">RejectBySeller</option>
-              </select>
-            </label>
-
-            {showSellerFields ? (
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                  Qty
-                  <input
-                    className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                    value={negotiationQty}
-                    onChange={(event) => setNegotiationQty(event.target.value)}
-                  />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                  Unit Price
-                  <input
-                    className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                    value={negotiationPrice}
-                    onChange={(event) => setNegotiationPrice(event.target.value)}
-                  />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                  Side
-                  <select
-                    className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                    value={negotiationSide}
-                    onChange={(event) => setNegotiationSide(event.target.value as "Buy" | "Sell")}
-                  >
-                    <option value="Sell">Sell</option>
-                    <option value="Buy">Buy</option>
-                  </select>
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                  Salt
-                  <input
-                    className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                    value={negotiationSalt}
-                    onChange={(event) => setNegotiationSalt(event.target.value)}
-                  />
-                </label>
-              </div>
-            ) : null}
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
+                Qty
+                <input
+                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
+                  value={negotiationQty}
+                  onChange={(event) => setNegotiationQty(event.target.value)}
+                />
+              </label>
+              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
+                Unit Price
+                <input
+                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
+                  value={negotiationPrice}
+                  onChange={(event) => setNegotiationPrice(event.target.value)}
+                />
+              </label>
+            </div>
 
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <button
                 className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => void runSellerAction("AcceptBySeller")}
+                onClick={() => void runSellerAcceptOffer()}
                 disabled={busy || !selectedSellerNegotiation || !sellerCanAccept}
               >
                 Accept Offer
               </button>
               <button
                 className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => {
-                  setSellerChoice("SubmitSellerTerms");
-                  void runSellerAction("SubmitSellerTerms");
-                }}
+                onClick={() => void runSellerNegotiate()}
                 disabled={busy || !selectedSellerNegotiation}
               >
                 Negotiate
@@ -799,22 +884,26 @@ export default function App() {
               Buyer can review every seller intent and jump straight into negotiation.
             </p>
             <div className="mt-3 grid gap-2">
-              {tradeIntents.map((intent) => (
-                <div key={intent.contractId} className="rounded-md border border-shell-700/70 px-3 py-2 text-sm">
-                  <div className="font-semibold text-shell-950">{intent.payload.instrument}</div>
-                  <div className="text-signal-slate">
-                    Qty {optionalToNumber(intent.payload.quantity)} | Min {optionalToNumber(intent.payload.minPrice)}
+              {tradeIntents.map((intent) => {
+                const closed = closedInstrumentSet.has(normalizeInstrument(intent.payload.instrument));
+                return (
+                  <div key={intent.contractId} className="rounded-md border border-shell-700/70 px-3 py-2 text-sm">
+                    <div className="font-semibold text-shell-950">{intent.payload.instrument}</div>
+                    <div className="text-signal-slate">
+                      Qty {optionalToNumber(intent.payload.quantity)} | Min {optionalToNumber(intent.payload.minPrice)}
+                    </div>
+                    <div className="mt-2">
+                      <button
+                        className="rounded-md border border-shell-700 px-3 py-1 text-xs font-semibold text-shell-950 disabled:cursor-not-allowed disabled:text-signal-slate"
+                        onClick={() => void runBuyerNegotiateFromIntent(intent)}
+                        disabled={busy || closed}
+                      >
+                        {closed ? "Closed" : "Negotiate"}
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-2">
-                    <button
-                      className="rounded-md border border-shell-700 px-3 py-1 text-xs font-semibold text-shell-950"
-                      onClick={() => void runBuyerNegotiateFromIntent(intent)}
-                    >
-                      Negotiate
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {tradeIntents.length === 0 ? <p className="text-sm text-signal-slate">No trade intents available.</p> : null}
             </div>
           </article>
@@ -930,8 +1019,8 @@ export default function App() {
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-                <div className="text-xs uppercase tracking-[0.12em]">Accepted (Total)</div>
-                <div className="mt-1 text-2xl font-semibold text-shell-950">{acceptedForOutsider.length}</div>
+                <div className="text-xs uppercase tracking-[0.12em]">Completed (Total)</div>
+                <div className="mt-1 text-2xl font-semibold text-shell-950">{completedTotalDisplay}</div>
               </div>
               <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
                 <div className="text-xs uppercase tracking-[0.12em]">New Since Load</div>
@@ -950,9 +1039,9 @@ export default function App() {
             <div className="mt-3 rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
               <div className="font-semibold text-shell-950">
                 {newAcceptedSinceLoad > 0
-                  ? "New acceptance detected in this session."
-                  : acceptedForOutsider.length > 0
-                    ? "Only historical accepted negotiations detected."
+                  ? "New completed negotiation detected in this session."
+                  : completedTotalDisplay > 0
+                    ? "Only historical completed negotiations detected."
                     : outsiderPublicCount > 0
                       ? "Public completion artifact detected."
                       : "No outcome signal yet."}
@@ -962,9 +1051,15 @@ export default function App() {
               </div>
             </div>
 
+            {sessionOnlyClosedInstruments.slice(0, 3).map((instrumentName) => (
+              <div key={`session-${instrumentName}`} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
+                <div className="font-semibold text-shell-950">Completed (Session)</div>
+                <div>{instrumentName.toUpperCase()}</div>
+              </div>
+            ))}
             {acceptedForOutsider.slice(0, 3).map((row) => (
               <div key={row.contractId} className="mt-3 rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
-                <div className="font-semibold text-shell-950">Accepted {shortId(row.contractId)}</div>
+                <div className="font-semibold text-shell-950">Completed {shortId(row.contractId)}</div>
                 <div>{row.payload.instrument}</div>
               </div>
             ))}
