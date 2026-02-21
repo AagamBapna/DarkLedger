@@ -24,209 +24,83 @@ import type {
 
 type RoleView = "Landing" | "DarkAuction" | "Seller" | "Buyer" | "Outsider" | "Inspector" | "Challenge";
 
-type SellerChoice =
-  | "SubmitSellerTerms"
-  | "CommitTerms"
-  | "RevealTerms"
-  | "AcceptBySeller"
-  | "RejectBySeller";
+type SellerChoice = "SubmitSellerTerms" | "CommitTerms" | "RevealTerms" | "AcceptBySeller" | "RejectBySeller";
+type BuyerChoice = "SubmitBuyerTerms" | "CommitTerms" | "RevealTerms" | "AcceptByBuyer" | "RejectByBuyer";
 
-type BuyerChoice =
-  | "SubmitBuyerTerms"
-  | "CommitTerms"
-  | "RevealTerms"
-  | "AcceptByBuyer"
-  | "RejectByBuyer";
-
-function aliasOf(value: string): string {
-  return value.includes("::") ? value.split("::")[0] : value;
-}
-
-function resolveAlias(availableParties: string[], alias: string): string {
-  const exact = availableParties.find((entry) => entry === alias);
-  if (exact) return exact;
-  const qualified = availableParties.find((entry) => entry.startsWith(`${alias}::`));
-  if (qualified) return qualified;
-  return alias;
-}
+function aliasOf(value: string): string { return value.includes("::") ? value.split("::")[0] : value; }
+function resolveAlias(availableParties: string[], alias: string): string { const exact = availableParties.find((e) => e === alias); if (exact) return exact; const qualified = availableParties.find((e) => e.startsWith(`${alias}::`)); if (qualified) return qualified; return alias; }
 
 function sideTag(value: string | { tag?: string } | Record<string, unknown>): string {
   if (typeof value === "string") return value;
-  if (typeof value === "object" && value !== null) {
-    if ("tag" in value && typeof value.tag === "string") return value.tag;
-    const keys = Object.keys(value);
-    if (keys.length === 1) return keys[0];
-  }
+  if (typeof value === "object" && value !== null) { if ("tag" in value && typeof value.tag === "string") return value.tag; const keys = Object.keys(value); if (keys.length === 1) return keys[0]; }
   return "";
 }
 
-async function sha256Hex(value: string): Promise<string> {
-  const data = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  const bytes = Array.from(new Uint8Array(digest));
-  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function shortId(value: string): string {
-  if (!value) return "-";
-  return value.length <= 16 ? value : `${value.slice(0, 8)}...${value.slice(-6)}`;
-}
-
-function optionalText(value: string | null | { tag: "Some" | "None"; value?: string }): string {
-  if (value === null || value === undefined) return "not committed";
-  if (typeof value === "string") return value;
-  if (value.tag === "Some") return value.value ?? "not committed";
-  return "not committed";
-}
-
-function statusPillClass(active: boolean): string {
-  return active
-    ? "border border-signal-mint/40 bg-shell-950 text-shell-900 shadow-soft"
-    : "border border-shell-700/70 bg-white/75 text-signal-slate hover:border-signal-mint/40 hover:text-shell-950";
-}
-
-function isValidPositiveNumber(value: string): boolean {
-  return parsePositiveDecimal(value) !== null;
-}
-
-function parsePositiveDecimal(value: string): string | null {
-  const trimmed = value.trim();
-  if (!/^\d+(\.\d+)?$/.test(trimmed)) {
-    return null;
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-  return trimmed;
-}
-
-function isLockedContractError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return lower.includes("local_verdict_locked_contracts") || lower.includes("locked contracts");
-}
-
-function normalizeLedgerError(message: string): string {
-  const lower = message.toLowerCase();
-  if (lower.includes("cannot accept before terms exist")) {
-    return "Cannot accept yet. Submit terms first using Negotiate.";
-  }
-  return message;
-}
+async function sha256Hex(value: string): Promise<string> { const data = new TextEncoder().encode(value); const digest = await crypto.subtle.digest("SHA-256", data); return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join(""); }
+function shortId(value: string): string { if (!value) return "-"; return value.length <= 16 ? value : `${value.slice(0, 8)}...${value.slice(-6)}`; }
+function optionalText(value: string | null | { tag: "Some" | "None"; value?: string }): string { if (value === null || value === undefined) return "not committed"; if (typeof value === "string") return value; if (value.tag === "Some") return value.value ?? "not committed"; return "not committed"; }
+function isValidPositiveNumber(value: string): boolean { return parsePositiveDecimal(value) !== null; }
+function parsePositiveDecimal(value: string): string | null { const t = value.trim(); if (!/^\d+(\.\d+)?$/.test(t)) return null; const p = Number(t); if (!Number.isFinite(p) || p <= 0) return null; return t; }
+function isLockedContractError(message: string): boolean { const l = message.toLowerCase(); return l.includes("local_verdict_locked_contracts") || l.includes("locked contracts"); }
+function normalizeLedgerError(message: string): string { if (message.toLowerCase().includes("cannot accept before terms exist")) return "Cannot accept yet. Submit terms first using Negotiate."; return message; }
 
 const NEGOTIATION_FIELD_CHOICES = ["SubmitSellerTerms", "SubmitBuyerTerms", "CommitTerms", "RevealTerms"];
+function normalizeInstrument(value: string): string { return value.trim().toLowerCase(); }
+function negotiationLaneKey(row: ContractRecord<PrivateNegotiationPayload>): string { return [normalizeInstrument(row.payload.instrument), aliasOf(row.payload.sellerAgent), aliasOf(row.payload.buyerAgent)].join("|"); }
+function negotiationScore(p: PrivateNegotiationPayload): number { let s = 0; if (!p.issuerApproved) s += 100; if (!isFullyAccepted(p)) s += 40; if (hasSubmittedTerms(p)) s += 20; if (isAcceptedByEither(p)) s += 8; if (p.sellerTermsRevealed) s += 2; if (p.buyerTermsRevealed) s += 2; return s; }
+function isFullyAccepted(p: PrivateNegotiationPayload): boolean { return p.sellerAccepted && p.buyerAccepted; }
+function isAcceptedByEither(p: PrivateNegotiationPayload): boolean { return p.sellerAccepted || p.buyerAccepted; }
+function isNegotiationClosed(p: PrivateNegotiationPayload): boolean { return isFullyAccepted(p); }
+function isNegotiationLive(p: PrivateNegotiationPayload): boolean { return !p.issuerApproved; }
+function hasSubmittedTerms(p: PrivateNegotiationPayload): boolean { return optionalToNumber(p.proposedQty) !== null && optionalToNumber(p.proposedUnitPrice) !== null; }
 
-function normalizeInstrument(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function negotiationLaneKey(row: ContractRecord<PrivateNegotiationPayload>): string {
-  return [
-    normalizeInstrument(row.payload.instrument),
-    aliasOf(row.payload.sellerAgent),
-    aliasOf(row.payload.buyerAgent),
-  ].join("|");
-}
-
-function negotiationScore(payload: PrivateNegotiationPayload): number {
-  let score = 0;
-  if (!payload.issuerApproved) score += 100;
-  if (!isFullyAccepted(payload)) score += 40;
-  if (hasSubmittedTerms(payload)) score += 20;
-  if (isAcceptedByEither(payload)) score += 8;
-  if (payload.sellerTermsRevealed) score += 2;
-  if (payload.buyerTermsRevealed) score += 2;
-  return score;
-}
-
-function isFullyAccepted(payload: PrivateNegotiationPayload): boolean {
-  return payload.sellerAccepted && payload.buyerAccepted;
-}
-
-function isAcceptedByEither(payload: PrivateNegotiationPayload): boolean {
-  return payload.sellerAccepted || payload.buyerAccepted;
-}
-
-function isNegotiationClosed(payload: PrivateNegotiationPayload): boolean {
-  return isFullyAccepted(payload);
-}
-
-function isNegotiationLive(payload: PrivateNegotiationPayload): boolean {
-  return !payload.issuerApproved;
-}
-
-function hasSubmittedTerms(payload: PrivateNegotiationPayload): boolean {
-  return optionalToNumber(payload.proposedQty) !== null && optionalToNumber(payload.proposedUnitPrice) !== null;
-}
-
-function collapseNegotiationLanes(
-  rows: Array<ContractRecord<PrivateNegotiationPayload>>,
-): Array<ContractRecord<PrivateNegotiationPayload>> {
+function collapseNegotiationLanes(rows: Array<ContractRecord<PrivateNegotiationPayload>>): Array<ContractRecord<PrivateNegotiationPayload>> {
   const byLane = new Map<string, ContractRecord<PrivateNegotiationPayload>>();
-  for (const row of rows) {
-    const key = negotiationLaneKey(row);
-    const existing = byLane.get(key);
-    if (!existing) {
-      byLane.set(key, row);
-      continue;
-    }
-    const existingScore = negotiationScore(existing.payload);
-    const nextScore = negotiationScore(row.payload);
-    if (nextScore > existingScore || (nextScore === existingScore && row.contractId > existing.contractId)) {
-      byLane.set(key, row);
-    }
-  }
+  for (const row of rows) { const key = negotiationLaneKey(row); const existing = byLane.get(key); if (!existing) { byLane.set(key, row); continue; } if (negotiationScore(row.payload) > negotiationScore(existing.payload) || (negotiationScore(row.payload) === negotiationScore(existing.payload) && row.contractId > existing.contractId)) byLane.set(key, row); }
   return Array.from(byLane.values());
 }
 
-function pickBestNegotiation(
-  rows: Array<ContractRecord<PrivateNegotiationPayload>>,
-  preferredContractId: string,
-  preferredInstrument?: string | null,
-): ContractRecord<PrivateNegotiationPayload> | null {
-  const liveRows = rows.filter((row) => isNegotiationLive(row.payload));
-  if (!liveRows.length) return null;
-
-  const byCid = liveRows.find((row) => row.contractId === preferredContractId);
-  if (byCid) return byCid;
-
-  const normalizedInstrument = preferredInstrument ? normalizeInstrument(preferredInstrument) : null;
-  const candidates = normalizedInstrument
-    ? liveRows.filter((row) => normalizeInstrument(row.payload.instrument) === normalizedInstrument)
-    : liveRows;
-  if (!candidates.length) return null;
-
-  const sorted = [...candidates].sort((left, right) => {
-    const scoreDelta = negotiationScore(right.payload) - negotiationScore(left.payload);
-    if (scoreDelta !== 0) return scoreDelta;
-    return right.contractId.localeCompare(left.contractId);
-  });
-  return sorted[0] ?? null;
+function pickBestNegotiation(rows: Array<ContractRecord<PrivateNegotiationPayload>>, preferredContractId: string, preferredInstrument?: string | null): ContractRecord<PrivateNegotiationPayload> | null {
+  const live = rows.filter((r) => isNegotiationLive(r.payload)); if (!live.length) return null;
+  const byCid = live.find((r) => r.contractId === preferredContractId); if (byCid) return byCid;
+  const ni = preferredInstrument ? normalizeInstrument(preferredInstrument) : null;
+  const cands = ni ? live.filter((r) => normalizeInstrument(r.payload.instrument) === ni) : live; if (!cands.length) return null;
+  return [...cands].sort((a, b) => { const d = negotiationScore(b.payload) - negotiationScore(a.payload); return d !== 0 ? d : b.contractId.localeCompare(a.contractId); })[0] ?? null;
 }
 
-interface DetectedCompletion {
-  contractId: string;
-  instrument: string;
-  quantity: number | null;
-  unitPrice: number | null;
-  seller: string;
-  buyer: string;
-  detectedAt: string;
-}
+interface DetectedCompletion { contractId: string; instrument: string; quantity: number | null; unitPrice: number | null; seller: string; buyer: string; detectedAt: string; }
+interface OutsiderAcceptedSignal { contractId: string; instrument: string; quantity: number | null; unitPrice: number | null; detectedAt: string; source: "Live Detection" | "Ledger Snapshot"; }
 
-interface OutsiderAcceptedSignal {
-  contractId: string;
-  instrument: string;
-  quantity: number | null;
-  unitPrice: number | null;
-  detectedAt: string;
-  source: "Live Detection" | "Ledger Snapshot";
+/* ── Navigation ── */
+const NAV_ITEMS: Array<{ key: RoleView; label: string; icon: string }> = [
+  { key: "Landing", label: "Dashboard", icon: "grid" },
+  { key: "DarkAuction", label: "Dark Auction", icon: "auction" },
+  { key: "Seller", label: "Seller Console", icon: "upload" },
+  { key: "Buyer", label: "Buyer Portal", icon: "download" },
+  { key: "Outsider", label: "Outsider View", icon: "eye" },
+  { key: "Inspector", label: "Inspector", icon: "search" },
+  { key: "Challenge", label: "Privacy Challenge", icon: "shield" },
+];
+
+function NavIcon({ type, className }: { type: string; className?: string }) {
+  const cn = className ?? "nav-icon";
+  const props = { className: cn, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (type) {
+    case "grid": return <svg {...props}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>;
+    case "auction": return <svg {...props}><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></svg>;
+    case "upload": return <svg {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>;
+    case "download": return <svg {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>;
+    case "eye": return <svg {...props}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>;
+    case "search": return <svg {...props}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>;
+    case "shield": return <svg {...props}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><polyline points="9 12 11 14 15 10" /></svg>;
+    default: return null;
+  }
 }
 
 export default function App() {
   const { availableParties } = usePartyContext();
-
   const [view, setView] = useState<RoleView>("Landing");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -255,7 +129,6 @@ export default function App() {
   const [instrument, setInstrument] = useState("COMPANY-SERIES-A");
   const [quantity, setQuantity] = useState("1200");
   const [minPrice, setMinPrice] = useState("98");
-
   const [sellerChoice, setSellerChoice] = useState<SellerChoice>("SubmitSellerTerms");
   const [buyerChoice, setBuyerChoice] = useState<BuyerChoice>("SubmitBuyerTerms");
   const [sellerNegotiationCid, setSellerNegotiationCid] = useState("");
@@ -269,1099 +142,216 @@ export default function App() {
   const [negotiationSalt, setNegotiationSalt] = useState("simple-demo-salt");
   const startupResetDone = useRef(false);
 
-  const sellerNegotiationsForSelection = useMemo(
-    () => collapseNegotiationLanes(sellerNegotiations.filter((row) =>
-      isNegotiationLive(row.payload))),
-    [sellerNegotiations],
-  );
-
-  const buyerNegotiationsCollapsed = useMemo(
-    () => collapseNegotiationLanes(buyerNegotiations.filter((row) =>
-      isNegotiationLive(row.payload))),
-    [buyerNegotiations],
-  );
-
-  const acceptedForOutsider = useMemo(
-    () => companyNegotiations.filter((row) => isNegotiationClosed(row.payload)),
-    [companyNegotiations],
-  );
+  const sellerNegotiationsForSelection = useMemo(() => collapseNegotiationLanes(sellerNegotiations.filter((r) => isNegotiationLive(r.payload))), [sellerNegotiations]);
+  const buyerNegotiationsCollapsed = useMemo(() => collapseNegotiationLanes(buyerNegotiations.filter((r) => isNegotiationLive(r.payload))), [buyerNegotiations]);
+  const acceptedForOutsider = useMemo(() => companyNegotiations.filter((r) => isNegotiationClosed(r.payload)), [companyNegotiations]);
   const completedTotalDisplay = acceptedForOutsider.length;
+
   const outsiderAcceptedSignals = useMemo<OutsiderAcceptedSignal[]>(() => {
-    const seen = new Set<string>();
-    const signals: OutsiderAcceptedSignal[] = [];
-
-    for (const row of detectedCompletions) {
-      if (seen.has(row.contractId)) continue;
-      seen.add(row.contractId);
-      signals.push({
-        contractId: row.contractId,
-        instrument: row.instrument,
-        quantity: row.quantity,
-        unitPrice: row.unitPrice,
-        detectedAt: row.detectedAt,
-        source: "Live Detection",
-      });
-    }
-
-    for (const row of acceptedForOutsider) {
-      if (seen.has(row.contractId)) continue;
-      seen.add(row.contractId);
-      signals.push({
-        contractId: row.contractId,
-        instrument: row.payload.instrument,
-        quantity: optionalToNumber(row.payload.proposedQty),
-        unitPrice: optionalToNumber(row.payload.proposedUnitPrice),
-        detectedAt: row.payload.expiresAt,
-        source: "Ledger Snapshot",
-      });
-    }
-
-    return signals
-      .sort((left, right) => {
-        const leftPriority = left.source === "Live Detection" ? 0 : 1;
-        const rightPriority = right.source === "Live Detection" ? 0 : 1;
-        if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-        return right.detectedAt.localeCompare(left.detectedAt);
-      })
-      .slice(0, 8);
+    const seen = new Set<string>(); const signals: OutsiderAcceptedSignal[] = [];
+    for (const r of detectedCompletions) { if (seen.has(r.contractId)) continue; seen.add(r.contractId); signals.push({ contractId: r.contractId, instrument: r.instrument, quantity: r.quantity, unitPrice: r.unitPrice, detectedAt: r.detectedAt, source: "Live Detection" }); }
+    for (const r of acceptedForOutsider) { if (seen.has(r.contractId)) continue; seen.add(r.contractId); signals.push({ contractId: r.contractId, instrument: r.payload.instrument, quantity: optionalToNumber(r.payload.proposedQty), unitPrice: optionalToNumber(r.payload.proposedUnitPrice), detectedAt: r.payload.expiresAt, source: "Ledger Snapshot" }); }
+    return signals.sort((a, b) => { const ap = a.source === "Live Detection" ? 0 : 1; const bp = b.source === "Live Detection" ? 0 : 1; if (ap !== bp) return ap - bp; return b.detectedAt.localeCompare(a.detectedAt); }).slice(0, 8);
   }, [acceptedForOutsider, detectedCompletions]);
 
-  const selectedSellerNegotiation = useMemo(
-    () => sellerNegotiationsForSelection.find((row) => row.contractId === sellerNegotiationCid) ?? null,
-    [sellerNegotiationCid, sellerNegotiationsForSelection],
-  );
+  const selectedSellerNegotiation = useMemo(() => sellerNegotiationsForSelection.find((r) => r.contractId === sellerNegotiationCid) ?? null, [sellerNegotiationCid, sellerNegotiationsForSelection]);
+  const buyerNegotiationsForSelection = useMemo(() => { if (!selectedIntentInstrument) return buyerNegotiationsCollapsed; const n = normalizeInstrument(selectedIntentInstrument); return buyerNegotiationsCollapsed.filter((r) => normalizeInstrument(r.payload.instrument) === n); }, [buyerNegotiationsCollapsed, selectedIntentInstrument]);
+  const selectedBuyerNegotiation = useMemo(() => buyerNegotiationsForSelection.find((r) => r.contractId === buyerNegotiationCid) ?? null, [buyerNegotiationCid, buyerNegotiationsForSelection]);
 
-  const buyerNegotiationsForSelection = useMemo(() => {
-    if (!selectedIntentInstrument) return buyerNegotiationsCollapsed;
-    const normalized = normalizeInstrument(selectedIntentInstrument);
-    return buyerNegotiationsCollapsed.filter(
-      (row) => normalizeInstrument(row.payload.instrument) === normalized,
-    );
-  }, [buyerNegotiationsCollapsed, selectedIntentInstrument]);
-
-  const selectedBuyerNegotiation = useMemo(
-    () => buyerNegotiationsForSelection.find((row) => row.contractId === buyerNegotiationCid) ?? null,
-    [buyerNegotiationCid, buyerNegotiationsForSelection],
-  );
-
-  useEffect(() => {
-    if (!sellerNegotiationCid) {
-      return;
-    }
-    if (!sellerNegotiationsForSelection.some((row) => row.contractId === sellerNegotiationCid)) {
-      setSellerNegotiationCid("");
-    }
-  }, [sellerNegotiationCid, sellerNegotiationsForSelection]);
-
-  useEffect(() => {
-    if (!buyerNegotiationCid) {
-      return;
-    }
-    if (!buyerNegotiationsForSelection.some((row) => row.contractId === buyerNegotiationCid)) {
-      setBuyerNegotiationCid("");
-    }
-  }, [buyerNegotiationCid, buyerNegotiationsForSelection]);
+  useEffect(() => { if (!sellerNegotiationCid) return; if (!sellerNegotiationsForSelection.some((r) => r.contractId === sellerNegotiationCid)) setSellerNegotiationCid(""); }, [sellerNegotiationCid, sellerNegotiationsForSelection]);
+  useEffect(() => { if (!buyerNegotiationCid) return; if (!buyerNegotiationsForSelection.some((r) => r.contractId === buyerNegotiationCid)) setBuyerNegotiationCid(""); }, [buyerNegotiationCid, buyerNegotiationsForSelection]);
 
   const refreshLedger = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
-      const [intents, sellerNeg, buyerNeg, companyNeg, outIntents, outNeg, outSettle, outAudit] = await Promise.all([
-        queryTradeIntents(seller),
-        queryPrivateNegotiations(sellerAgent),
-        queryPrivateNegotiations(buyerAgent),
-        queryPrivateNegotiations(company),
-        queryTradeIntents(outsider),
-        queryPrivateNegotiations(outsider),
-        queryTradeSettlements(outsider),
-        queryAuditRecords(outsider),
-      ]);
-
-      setTradeIntents(intents);
-      setSellerNegotiations(sellerNeg);
-      setBuyerNegotiations(buyerNeg);
-      setCompanyNegotiations(companyNeg);
-      setOutsiderIntents(outIntents);
-      setOutsiderNegotiations(outNeg);
-      setOutsiderSettlements(outSettle);
-      setOutsiderAudits(outAudit);
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
+      const [intents, sNeg, bNeg, cNeg, oI, oN, oS, oA] = await Promise.all([queryTradeIntents(seller), queryPrivateNegotiations(sellerAgent), queryPrivateNegotiations(buyerAgent), queryPrivateNegotiations(company), queryTradeIntents(outsider), queryPrivateNegotiations(outsider), queryTradeSettlements(outsider), queryAuditRecords(outsider)]);
+      setTradeIntents(intents); setSellerNegotiations(sNeg); setBuyerNegotiations(bNeg); setCompanyNegotiations(cNeg); setOutsiderIntents(oI); setOutsiderNegotiations(oN); setOutsiderSettlements(oS); setOutsiderAudits(oA);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setLoading(false); }
   }, [buyerAgent, company, outsider, seller, sellerAgent]);
 
-  useEffect(() => {
-    if (view === "Outsider") {
-      if (outsiderViewPrimedRef.current) {
-        return;
-      }
-      seenAcceptedCidsRef.current = new Set(acceptedForOutsider.map((row) => row.contractId));
-      outsiderDetectionInitializedRef.current = true;
-      setDetectedCompletions([]);
-      outsiderViewPrimedRef.current = true;
-      return;
-    }
-    outsiderViewPrimedRef.current = false;
-  }, [acceptedForOutsider, view]);
+  useEffect(() => { if (view === "Outsider") { if (outsiderViewPrimedRef.current) return; seenAcceptedCidsRef.current = new Set(acceptedForOutsider.map((r) => r.contractId)); outsiderDetectionInitializedRef.current = true; setDetectedCompletions([]); outsiderViewPrimedRef.current = true; return; } outsiderViewPrimedRef.current = false; }, [acceptedForOutsider, view]);
+  useEffect(() => { if (view !== "Outsider" || loading) return; const seen = seenAcceptedCidsRef.current; if (!outsiderDetectionInitializedRef.current) { acceptedForOutsider.forEach((r) => seen.add(r.contractId)); outsiderDetectionInitializedRef.current = true; return; } const nr = acceptedForOutsider.filter((r) => !seen.has(r.contractId)); if (!nr.length) return; const dt = new Date().toISOString(); nr.forEach((r) => seen.add(r.contractId)); setDetectedCompletions((prev) => [...nr.map((r) => ({ contractId: r.contractId, instrument: r.payload.instrument, quantity: optionalToNumber(r.payload.proposedQty), unitPrice: optionalToNumber(r.payload.proposedUnitPrice), seller: r.payload.seller, buyer: r.payload.buyer, detectedAt: dt })), ...prev].slice(0, 20)); }, [acceptedForOutsider, loading, view]);
+  useEffect(() => { if (startupResetDone.current) return; startupResetDone.current = true; void (async () => { try { const ex = await queryTradeIntents(seller); await Promise.all(ex.map((i) => exerciseChoice(seller, TEMPLATE_IDS.tradeIntent, i.contractId, "ArchiveIntent", {}))); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { await refreshLedger(); } })(); }, [refreshLedger, seller]);
+  useEffect(() => { if (view !== "Outsider") return; const t = window.setInterval(() => { if (!busy) void refreshLedger(); }, 2000); return () => window.clearInterval(t); }, [busy, refreshLedger, view]);
 
-  useEffect(() => {
-    if (view !== "Outsider" || loading) {
-      return;
-    }
-
-    const seen = seenAcceptedCidsRef.current;
-    if (!outsiderDetectionInitializedRef.current) {
-      acceptedForOutsider.forEach((row) => seen.add(row.contractId));
-      outsiderDetectionInitializedRef.current = true;
-      return;
-    }
-
-    const newRows = acceptedForOutsider.filter((row) => !seen.has(row.contractId));
-    if (newRows.length === 0) {
-      return;
-    }
-
-    const detectedAt = new Date().toISOString();
-    const additions: DetectedCompletion[] = newRows.map((row) => ({
-      contractId: row.contractId,
-      instrument: row.payload.instrument,
-      quantity: optionalToNumber(row.payload.proposedQty),
-      unitPrice: optionalToNumber(row.payload.proposedUnitPrice),
-      seller: row.payload.seller,
-      buyer: row.payload.buyer,
-      detectedAt,
-    }));
-
-    newRows.forEach((row) => seen.add(row.contractId));
-    setDetectedCompletions((prev) => [...additions, ...prev].slice(0, 20));
-  }, [acceptedForOutsider, loading, view]);
-
-  useEffect(() => {
-    if (startupResetDone.current) {
-      return;
-    }
-    startupResetDone.current = true;
-
-    void (async () => {
-      try {
-        const existingIntents = await queryTradeIntents(seller);
-        await Promise.all(existingIntents.map((intent) => exerciseChoice(
-          seller,
-          TEMPLATE_IDS.tradeIntent,
-          intent.contractId,
-          "ArchiveIntent",
-          {},
-        )));
-      } catch (reason) {
-        const message = reason instanceof Error ? reason.message : String(reason);
-        setError(message);
-      } finally {
-        await refreshLedger();
-      }
-    })();
-
-    return () => {};
-  }, [refreshLedger, seller]);
-
-  useEffect(() => {
-    if (view !== "Outsider") return;
-    const timer = window.setInterval(() => {
-      if (!busy) void refreshLedger();
-    }, 2000);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [busy, refreshLedger, view]);
-
-  const runAction = useCallback(async (description: string, action: () => Promise<void>): Promise<boolean> => {
-    setBusy(true);
-    setStatus(null);
-    setError(null);
-    try {
-      await action();
-      setStatus(description);
-      await refreshLedger();
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      await refreshLedger();
-      return true;
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      setError(normalizeLedgerError(message));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, [refreshLedger]);
-
-  const createTradeIntent = useCallback(async () => {
-    await runAction("Trade intent created.", async () => {
-      await createContract(seller, TEMPLATE_IDS.tradeIntent, {
-        issuer: company,
-        seller,
-        sellerAgent,
-        buyer,
-        instrument,
-        quantity: Number.parseFloat(quantity),
-        minPrice: Number.parseFloat(minPrice),
-      });
-    });
-  }, [buyer, company, instrument, minPrice, quantity, runAction, seller, sellerAgent]);
+  const runAction = useCallback(async (desc: string, action: () => Promise<void>): Promise<boolean> => { setBusy(true); setStatus(null); setError(null); try { await action(); setStatus(desc); await refreshLedger(); await new Promise((r) => setTimeout(r, 120)); await refreshLedger(); return true; } catch (e) { setError(normalizeLedgerError(e instanceof Error ? e.message : String(e))); return false; } finally { setBusy(false); } }, [refreshLedger]);
+  const createTradeIntent = useCallback(async () => { await runAction("Trade intent created.", async () => { await createContract(seller, TEMPLATE_IDS.tradeIntent, { issuer: company, seller, sellerAgent, buyer, instrument, quantity: Number.parseFloat(quantity), minPrice: Number.parseFloat(minPrice) }); }); }, [buyer, company, instrument, minPrice, quantity, runAction, seller, sellerAgent]);
 
   const negotiationArgument = useCallback(async (choice: SellerChoice | BuyerChoice): Promise<Record<string, unknown>> => {
-    const qtyDecimal = parsePositiveDecimal(negotiationQty);
-    const priceDecimal = parsePositiveDecimal(negotiationPrice);
-
-    if (choice === "SubmitSellerTerms" || choice === "SubmitBuyerTerms") {
-      if (!qtyDecimal || !priceDecimal) {
-        throw new Error("Enter valid positive decimal qty and unit price.");
-      }
-      return {
-        qty: qtyDecimal,
-        unitPrice: priceDecimal,
-      };
-    }
-
-    if (choice === "CommitTerms") {
-      if (!qtyDecimal || !priceDecimal) {
-        throw new Error("Enter valid positive decimal qty and unit price.");
-      }
-      const qtyText = qtyDecimal;
-      const priceText = priceDecimal;
-      const commitmentHash = await sha256Hex(`${qtyText}|${priceText}|${negotiationSalt}`);
-      return {
-        side: { tag: negotiationSide, value: {} },
-        commitmentHash,
-      };
-    }
-
-    if (choice === "RevealTerms") {
-      if (!qtyDecimal || !priceDecimal) {
-        throw new Error("Enter valid positive decimal qty and unit price.");
-      }
-      return {
-        side: { tag: negotiationSide, value: {} },
-        qtyText: qtyDecimal,
-        unitPriceText: priceDecimal,
-        salt: negotiationSalt,
-      };
-    }
-
+    const qD = parsePositiveDecimal(negotiationQty); const pD = parsePositiveDecimal(negotiationPrice);
+    if (choice === "SubmitSellerTerms" || choice === "SubmitBuyerTerms") { if (!qD || !pD) throw new Error("Enter valid positive decimal qty and unit price."); return { qty: qD, unitPrice: pD }; }
+    if (choice === "CommitTerms") { if (!qD || !pD) throw new Error("Enter valid positive decimal qty and unit price."); return { side: { tag: negotiationSide, value: {} }, commitmentHash: await sha256Hex(`${qD}|${pD}|${negotiationSalt}`) }; }
+    if (choice === "RevealTerms") { if (!qD || !pD) throw new Error("Enter valid positive decimal qty and unit price."); return { side: { tag: negotiationSide, value: {} }, qtyText: qD, unitPriceText: pD, salt: negotiationSalt }; }
     return {};
   }, [negotiationPrice, negotiationQty, negotiationSalt, negotiationSide]);
 
-  const pickActiveNegotiation = useCallback((
-    rows: Array<ContractRecord<PrivateNegotiationPayload>>,
-    preferredContractId: string,
-    preferredInstrument?: string | null,
-  ): ContractRecord<PrivateNegotiationPayload> | null => {
-    return pickBestNegotiation(rows, preferredContractId, preferredInstrument);
-  }, []);
-
-  const waitForNegotiationVisibility = useCallback(async (
-    partyForQuery: string,
-    instrumentName: string,
-    preferredCid?: string | null,
-  ): Promise<{
-    rows: Array<ContractRecord<PrivateNegotiationPayload>>;
-    match: ContractRecord<PrivateNegotiationPayload>;
-  } | null> => {
-    const normalized = normalizeInstrument(instrumentName);
-    const targetCid = preferredCid ?? "";
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const rows = await queryPrivateNegotiations(partyForQuery);
-      const match = pickBestNegotiation(rows, targetCid, normalized);
-      if (match) {
-        return { rows, match };
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    return null;
-  }, []);
+  const pickActiveNegotiation = useCallback((rows: Array<ContractRecord<PrivateNegotiationPayload>>, pid: string, pi?: string | null) => pickBestNegotiation(rows, pid, pi), []);
+  const waitForNegotiationVisibility = useCallback(async (party: string, inst: string, cid?: string | null) => { const n = normalizeInstrument(inst); const tc = cid ?? ""; for (let a = 0; a < 8; a++) { const rows = await queryPrivateNegotiations(party); const m = pickBestNegotiation(rows, tc, n); if (m) return { rows, match: m }; await new Promise((r) => setTimeout(r, 250)); } return null; }, []);
 
   const runSellerAction = useCallback(async (choice?: SellerChoice): Promise<boolean> => {
-    const effectiveChoice = choice ?? sellerChoice;
-
-    if (NEGOTIATION_FIELD_CHOICES.includes(effectiveChoice)) {
-      if (!isValidPositiveNumber(negotiationQty) || !isValidPositiveNumber(negotiationPrice)) {
-        setError("Enter valid positive qty and unit price before negotiating.");
-        return false;
-      }
-    }
-
-    return runAction(`Seller action ${effectiveChoice} executed.`, async () => {
-      const maxAttempts = 6;
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const liveRows = await queryPrivateNegotiations(sellerAgent);
-        setSellerNegotiations(liveRows);
-        const live = pickActiveNegotiation(
-          liveRows,
-          sellerNegotiationCid,
-          selectedSellerNegotiation?.payload.instrument ?? null,
-        );
-        if (!live) {
-          if (attempt < maxAttempts - 1) {
-            await new Promise((resolve) => setTimeout(resolve, 300));
-            continue;
-          }
-          throw new Error("No seller-side negotiation available. Try Buyer -> Negotiate first, then Refresh.");
-        }
-        setSellerNegotiationCid(live.contractId);
-
-        const arg = await negotiationArgument(effectiveChoice);
-        try {
-          const exerciseResult = await exerciseChoice(
-            sellerAgent,
-            TEMPLATE_IDS.privateNegotiation,
-            live.contractId,
-            effectiveChoice,
-            arg,
-          );
-          const nextCid = typeof exerciseResult === "string" ? exerciseResult : "";
-          if (nextCid) {
-            const visible = await waitForNegotiationVisibility(sellerAgent, live.payload.instrument, nextCid);
-            const resolvedNextCid = visible ? visible.match.contractId : nextCid;
-            setSellerLastGeneratedCid(resolvedNextCid);
-            if (visible) {
-              setSellerNegotiations(visible.rows);
-              setSellerNegotiationCid(resolvedNextCid);
-            } else {
-              setSellerNegotiationCid(resolvedNextCid);
-            }
-          }
-          return;
-        } catch (reason) {
-          const message = reason instanceof Error ? reason.message : String(reason);
-          if (!isLockedContractError(message) || attempt === maxAttempts - 1) {
-            throw reason;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 1100));
-        }
-      }
-    });
-  }, [
-    sellerChoice,
-    negotiationQty,
-    negotiationPrice,
-    negotiationArgument,
-    runAction,
-    sellerAgent,
-    sellerNegotiationCid,
-    selectedSellerNegotiation,
-    pickActiveNegotiation,
-    waitForNegotiationVisibility,
-  ]);
+    const c = choice ?? sellerChoice;
+    if (NEGOTIATION_FIELD_CHOICES.includes(c) && (!isValidPositiveNumber(negotiationQty) || !isValidPositiveNumber(negotiationPrice))) { setError("Enter valid positive qty and unit price."); return false; }
+    return runAction(`Seller ${c} executed.`, async () => { for (let a = 0; a < 6; a++) { const lr = await queryPrivateNegotiations(sellerAgent); setSellerNegotiations(lr); const live = pickActiveNegotiation(lr, sellerNegotiationCid, selectedSellerNegotiation?.payload.instrument ?? null); if (!live) { if (a < 5) { await new Promise((r) => setTimeout(r, 300)); continue; } throw new Error("No seller negotiation available."); } setSellerNegotiationCid(live.contractId); try { const res = await exerciseChoice(sellerAgent, TEMPLATE_IDS.privateNegotiation, live.contractId, c, await negotiationArgument(c)); const nc = typeof res === "string" ? res : ""; if (nc) { const v = await waitForNegotiationVisibility(sellerAgent, live.payload.instrument, nc); const rc = v ? v.match.contractId : nc; setSellerLastGeneratedCid(rc); if (v) { setSellerNegotiations(v.rows); setSellerNegotiationCid(rc); } else setSellerNegotiationCid(rc); } return; } catch (e) { const m = e instanceof Error ? e.message : String(e); if (!isLockedContractError(m) || a === 5) throw e; await new Promise((r) => setTimeout(r, 1100)); } } });
+  }, [sellerChoice, negotiationQty, negotiationPrice, negotiationArgument, runAction, sellerAgent, sellerNegotiationCid, selectedSellerNegotiation, pickActiveNegotiation, waitForNegotiationVisibility]);
 
   const runBuyerAction = useCallback(async (choice?: BuyerChoice): Promise<boolean> => {
-    const effectiveChoice = choice ?? buyerChoice;
+    const c = choice ?? buyerChoice;
+    if (NEGOTIATION_FIELD_CHOICES.includes(c) && (!isValidPositiveNumber(negotiationQty) || !isValidPositiveNumber(negotiationPrice))) { setError("Enter valid positive qty and unit price."); return false; }
+    return runAction(`Buyer ${c} executed.`, async () => { for (let a = 0; a < 6; a++) { const lr = await queryPrivateNegotiations(buyerAgent); setBuyerNegotiations(lr); const live = pickActiveNegotiation(lr, buyerNegotiationCid, selectedBuyerNegotiation?.payload.instrument ?? selectedIntentInstrument); if (!live) { if (a < 5) { await new Promise((r) => setTimeout(r, 300)); continue; } throw new Error("No buyer negotiation available."); } setBuyerNegotiationCid(live.contractId); try { const res = await exerciseChoice(buyerAgent, TEMPLATE_IDS.privateNegotiation, live.contractId, c, await negotiationArgument(c)); const nc = typeof res === "string" ? res : ""; if (nc) { const v = await waitForNegotiationVisibility(buyerAgent, live.payload.instrument, nc); const rc = v ? v.match.contractId : nc; setBuyerLastGeneratedCid(rc); if (v) { setBuyerNegotiations(v.rows); setSelectedIntentInstrument(v.match.payload.instrument); setBuyerNegotiationCid(rc); } else { setSelectedIntentInstrument(live.payload.instrument); setBuyerNegotiationCid(rc); } } return; } catch (e) { const m = e instanceof Error ? e.message : String(e); if (!isLockedContractError(m) || a === 5) throw e; await new Promise((r) => setTimeout(r, 1100)); } } });
+  }, [buyerChoice, negotiationQty, negotiationPrice, negotiationArgument, runAction, buyerAgent, buyerNegotiationCid, selectedBuyerNegotiation, selectedIntentInstrument, pickActiveNegotiation, waitForNegotiationVisibility]);
 
-    if (NEGOTIATION_FIELD_CHOICES.includes(effectiveChoice)) {
-      if (!isValidPositiveNumber(negotiationQty) || !isValidPositiveNumber(negotiationPrice)) {
-        setError("Enter valid positive qty and unit price before negotiating.");
-        return false;
-      }
-    }
-
-    return runAction(`Buyer action ${effectiveChoice} executed.`, async () => {
-      const maxAttempts = 6;
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const liveRows = await queryPrivateNegotiations(buyerAgent);
-        setBuyerNegotiations(liveRows);
-        const live = pickActiveNegotiation(
-          liveRows,
-          buyerNegotiationCid,
-          selectedBuyerNegotiation?.payload.instrument ?? selectedIntentInstrument,
-        );
-        if (!live) {
-          if (attempt < maxAttempts - 1) {
-            await new Promise((resolve) => setTimeout(resolve, 300));
-            continue;
-          }
-          throw new Error("No buyer-side negotiation available. Start from Trade Intents -> Negotiate.");
-        }
-        setBuyerNegotiationCid(live.contractId);
-
-        const arg = await negotiationArgument(effectiveChoice);
-        try {
-          const exerciseResult = await exerciseChoice(
-            buyerAgent,
-            TEMPLATE_IDS.privateNegotiation,
-            live.contractId,
-            effectiveChoice,
-            arg,
-          );
-          const nextCid = typeof exerciseResult === "string" ? exerciseResult : "";
-          if (nextCid) {
-            const visible = await waitForNegotiationVisibility(buyerAgent, live.payload.instrument, nextCid);
-            const resolvedNextCid = visible ? visible.match.contractId : nextCid;
-            setBuyerLastGeneratedCid(resolvedNextCid);
-            if (visible) {
-              setBuyerNegotiations(visible.rows);
-              setSelectedIntentInstrument(visible.match.payload.instrument);
-              setBuyerNegotiationCid(resolvedNextCid);
-            } else {
-              setSelectedIntentInstrument(live.payload.instrument);
-              setBuyerNegotiationCid(resolvedNextCid);
-            }
-          }
-          return;
-        } catch (reason) {
-          const message = reason instanceof Error ? reason.message : String(reason);
-          if (!isLockedContractError(message) || attempt === maxAttempts - 1) {
-            throw reason;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 1100));
-        }
-      }
-    });
-  }, [
-    buyerChoice,
-    negotiationQty,
-    negotiationPrice,
-    negotiationArgument,
-    runAction,
-    buyerAgent,
-    buyerNegotiationCid,
-    selectedBuyerNegotiation,
-    selectedIntentInstrument,
-    pickActiveNegotiation,
-    waitForNegotiationVisibility,
-  ]);
-
-  const runBuyerNegotiate = useCallback(async () => {
-    await runBuyerAction("SubmitBuyerTerms");
-  }, [runBuyerAction]);
-
-  const runSellerNegotiate = useCallback(async () => {
-    await runSellerAction("SubmitSellerTerms");
-  }, [runSellerAction]);
-
-  const runSellerAcceptOffer = useCallback(async () => {
-    if (!selectedSellerNegotiation) {
-      setError("No seller-side negotiation contract available yet.");
-      return;
-    }
-    if (!hasSubmittedTerms(selectedSellerNegotiation.payload)) {
-      setError("Cannot accept yet. Submit terms first using Negotiate.");
-      return;
-    }
-    const accepted = await runSellerAction("AcceptBySeller");
-    if (!accepted) return;
-  }, [runSellerAction, selectedSellerNegotiation]);
-
-  const runBuyerAcceptOffer = useCallback(async () => {
-    if (!selectedBuyerNegotiation) {
-      setError("No buyer-side negotiation contract available yet.");
-      return;
-    }
-    if (!hasSubmittedTerms(selectedBuyerNegotiation.payload)) {
-      setError("Cannot accept yet. Submit terms first using Negotiate.");
-      return;
-    }
-    const accepted = await runBuyerAction("AcceptByBuyer");
-    if (!accepted) return;
-  }, [runBuyerAction, selectedBuyerNegotiation]);
+  const runBuyerNegotiate = useCallback(async () => { await runBuyerAction("SubmitBuyerTerms"); }, [runBuyerAction]);
+  const runSellerNegotiate = useCallback(async () => { await runSellerAction("SubmitSellerTerms"); }, [runSellerAction]);
+  const runSellerAcceptOffer = useCallback(async () => { if (!selectedSellerNegotiation) { setError("No seller negotiation available."); return; } if (!hasSubmittedTerms(selectedSellerNegotiation.payload)) { setError("Submit terms first."); return; } await runSellerAction("AcceptBySeller"); }, [runSellerAction, selectedSellerNegotiation]);
+  const runBuyerAcceptOffer = useCallback(async () => { if (!selectedBuyerNegotiation) { setError("No buyer negotiation available."); return; } if (!hasSubmittedTerms(selectedBuyerNegotiation.payload)) { setError("Submit terms first."); return; } await runBuyerAction("AcceptByBuyer"); }, [runBuyerAction, selectedBuyerNegotiation]);
 
   const runBuyerNegotiateFromIntent = useCallback(async (intent: ContractRecord<TradeIntentPayload>) => {
-    const qty = optionalToNumber(intent.payload.quantity);
-    const price = optionalToNumber(intent.payload.minPrice);
-    if (qty === null || price === null || qty <= 0 || price <= 0) {
-      setError("Intent has invalid qty/price and cannot be used for negotiation.");
-      return;
-    }
-
-    setNegotiationQty(String(qty));
-    setNegotiationPrice(String(price));
-    setNegotiationSide("Buy");
-    setBuyerChoice("SubmitBuyerTerms");
-
-    await runAction(`Negotiation setup for ${intent.payload.instrument}.`, async () => {
-      const liveRows = await queryPrivateNegotiations(buyerAgent);
-      setBuyerNegotiations(liveRows);
-      const normalizedInstrument = normalizeInstrument(intent.payload.instrument);
-      const match = pickBestNegotiation(liveRows, "", normalizedInstrument);
-
+    const qty = optionalToNumber(intent.payload.quantity); const price = optionalToNumber(intent.payload.minPrice);
+    if (qty === null || price === null || qty <= 0 || price <= 0) { setError("Invalid intent."); return; }
+    setNegotiationQty(String(qty)); setNegotiationPrice(String(price)); setNegotiationSide("Buy"); setBuyerChoice("SubmitBuyerTerms");
+    await runAction(`Setup for ${intent.payload.instrument}.`, async () => {
+      const lr = await queryPrivateNegotiations(buyerAgent); setBuyerNegotiations(lr);
+      const match = pickBestNegotiation(lr, "", normalizeInstrument(intent.payload.instrument));
       if (!match || !hasSubmittedTerms(match.payload)) {
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-        const payload: Record<string, unknown> = {
-          issuer: company,
-          seller,
-          sellerAgent,
-          buyer,
-          buyerAgent,
-          instrument: intent.payload.instrument,
-          // Seed negotiation with seller intent terms so buyer can accept directly.
-          proposedQty: qty,
-          proposedUnitPrice: price,
-          sellerAccepted: true,
-          buyerAccepted: false,
-          issuerApproved: false,
-          expiresAt,
-          sellerCommitmentHash: null,
-          buyerCommitmentHash: null,
-          sellerTermsRevealed: false,
-          buyerTermsRevealed: false,
-        };
-        const created = await createContract<PrivateNegotiationPayload>(
-          company,
-          TEMPLATE_IDS.privateNegotiation,
-          payload,
-        );
-        const visible = await waitForNegotiationVisibility(buyerAgent, intent.payload.instrument, created.contractId);
-        if (visible) {
-          setBuyerNegotiations(visible.rows);
-          setSelectedIntentInstrument(intent.payload.instrument);
-          setBuyerLastGeneratedCid(visible.match.contractId);
-          setBuyerNegotiationCid(visible.match.contractId);
-        } else {
-          setSelectedIntentInstrument(intent.payload.instrument);
-          setBuyerLastGeneratedCid(created.contractId);
-          setBuyerNegotiationCid(created.contractId);
-        }
+        const created = await createContract<PrivateNegotiationPayload>(company, TEMPLATE_IDS.privateNegotiation, { issuer: company, seller, sellerAgent, buyer, buyerAgent, instrument: intent.payload.instrument, proposedQty: qty, proposedUnitPrice: price, sellerAccepted: true, buyerAccepted: false, issuerApproved: false, expiresAt: new Date(Date.now() + 86400000).toISOString(), sellerCommitmentHash: null, buyerCommitmentHash: null, sellerTermsRevealed: false, buyerTermsRevealed: false });
+        const v = await waitForNegotiationVisibility(buyerAgent, intent.payload.instrument, created.contractId);
+        if (v) { setBuyerNegotiations(v.rows); setSelectedIntentInstrument(intent.payload.instrument); setBuyerLastGeneratedCid(v.match.contractId); setBuyerNegotiationCid(v.match.contractId); }
+        else { setSelectedIntentInstrument(intent.payload.instrument); setBuyerLastGeneratedCid(created.contractId); setBuyerNegotiationCid(created.contractId); }
       } else {
-        const visible = await waitForNegotiationVisibility(buyerAgent, intent.payload.instrument, match.contractId);
-        if (visible) {
-          setBuyerNegotiations(visible.rows);
-          setSelectedIntentInstrument(intent.payload.instrument);
-          setBuyerNegotiationCid(visible.match.contractId);
-        } else {
-          setSelectedIntentInstrument(intent.payload.instrument);
-          setBuyerNegotiationCid(match.contractId);
-        }
+        const v = await waitForNegotiationVisibility(buyerAgent, intent.payload.instrument, match.contractId);
+        if (v) { setBuyerNegotiations(v.rows); setSelectedIntentInstrument(intent.payload.instrument); setBuyerNegotiationCid(v.match.contractId); }
+        else { setSelectedIntentInstrument(intent.payload.instrument); setBuyerNegotiationCid(match.contractId); }
       }
     });
   }, [buyer, buyerAgent, company, runAction, seller, sellerAgent, waitForNegotiationVisibility]);
 
-  const selectedTerms = (payload: PrivateNegotiationPayload) => {
-    const qty = optionalToNumber(payload.proposedQty);
-    const price = optionalToNumber(payload.proposedUnitPrice);
-    if (qty === null || price === null) return "No price/qty terms submitted yet.";
-    return `Qty ${qty} @ ${price}`;
-  };
-
-  const copyContractId = useCallback(async (contractId: string) => {
-    try {
-      await navigator.clipboard.writeText(contractId);
-      setStatus(`Copied contract ID ${shortId(contractId)}.`);
-      setError(null);
-    } catch {
-      setError("Unable to copy contract ID. Clipboard permission may be blocked.");
-    }
-  }, []);
-
+  const selectedTerms = (p: PrivateNegotiationPayload) => { const q = optionalToNumber(p.proposedQty); const pr = optionalToNumber(p.proposedUnitPrice); if (q === null || pr === null) return "No terms yet."; return `Qty ${q} @ ${pr}`; };
+  const copyContractId = useCallback(async (cid: string) => { try { await navigator.clipboard.writeText(cid); setStatus(`Copied ${shortId(cid)}.`); setError(null); } catch { setError("Clipboard blocked."); } }, []);
   const suggestedIntentCid = useMemo(() => tradeIntents[0]?.contractId ?? "", [tradeIntents]);
-  const suggestedNegotiationCid = useMemo(() => {
-    return selectedSellerNegotiation?.contractId
-      ?? selectedBuyerNegotiation?.contractId
-      ?? sellerNegotiationsForSelection[0]?.contractId
-      ?? buyerNegotiationsForSelection[0]?.contractId
-      ?? companyNegotiations[0]?.contractId
-      ?? "";
-  }, [
-    buyerNegotiationsForSelection,
-    companyNegotiations,
-    selectedBuyerNegotiation,
-    selectedSellerNegotiation,
-    sellerNegotiationsForSelection,
-  ]);
+  const suggestedNegotiationCid = useMemo(() => selectedSellerNegotiation?.contractId ?? selectedBuyerNegotiation?.contractId ?? sellerNegotiationsForSelection[0]?.contractId ?? buyerNegotiationsForSelection[0]?.contractId ?? companyNegotiations[0]?.contractId ?? "", [buyerNegotiationsForSelection, companyNegotiations, selectedBuyerNegotiation, selectedSellerNegotiation, sellerNegotiationsForSelection]);
+  const sellerCanAccept = selectedSellerNegotiation ? hasSubmittedTerms(selectedSellerNegotiation.payload) && !selectedSellerNegotiation.payload.sellerAccepted : false;
+  const buyerCanAccept = selectedBuyerNegotiation ? hasSubmittedTerms(selectedBuyerNegotiation.payload) && !selectedBuyerNegotiation.payload.buyerAccepted : false;
 
-  const sellerCanAccept = selectedSellerNegotiation
-    ? hasSubmittedTerms(selectedSellerNegotiation.payload) && !selectedSellerNegotiation.payload.sellerAccepted
-    : false;
-  const buyerCanAccept = selectedBuyerNegotiation
-    ? hasSubmittedTerms(selectedBuyerNegotiation.payload) && !selectedBuyerNegotiation.payload.buyerAccepted
-    : false;
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" });
+  const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+  const ic = "mt-1.5 w-full rounded-xl border border-[#E2E8F0] bg-slate-50 px-4 py-2.5 text-sm text-[#1E293B]";
+  const lc = "text-xs font-semibold uppercase tracking-wider text-[#64748B]";
 
   return (
-    <main className="app-shell mx-auto max-w-7xl px-4 py-8 md:px-8 lg:py-10">
-      <section className="app-panel panel-sheen relative overflow-hidden rounded-[1.75rem] border border-shell-700 bg-white/80 p-6 shadow-soft">
-        <div className="pointer-events-none absolute -right-12 -top-14 h-40 w-40 rounded-full bg-signal-mint/20 blur-3xl" />
-        <div className="pointer-events-none absolute -left-16 bottom-0 h-36 w-36 rounded-full bg-[#46a8c9]/20 blur-3xl" />
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-signal-slate">DarkLedger</p>
-            <h1 className="mt-1 text-3xl font-bold text-shell-950">Private Trading Console</h1>
-            <p className="mt-2 text-sm text-signal-slate">
-              Confidential negotiation flow with selective visibility, issuer control, and auditable settlement outcomes.
-            </p>
+    <div className="dashboard-layout">
+      {/* Sidebar */}
+      <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
+        <div className="flex items-center gap-3 px-5 py-5">
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#14B8A6] to-[#0D9488]">
+            <svg className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
           </div>
-          <button
-            className="rounded-xl border border-shell-700/75 bg-white/75 px-3 py-2 text-sm font-semibold text-shell-950 shadow-soft"
-            onClick={() => void refreshLedger()}
-            disabled={busy || loading}
-          >
-            Refresh
+          {!sidebarCollapsed && <h1 className="text-base font-bold text-[#1E293B]" style={{ fontFamily: "Sora" }}>DarkLedger</h1>}
+          <button className="ml-auto flex h-7 w-7 items-center justify-center rounded-lg text-[#64748B] hover:bg-slate-100" onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>{sidebarCollapsed ? <polyline points="9 18 15 12 9 6" /> : <polyline points="15 18 9 12 15 6" />}</svg>
           </button>
         </div>
-
-        <div className="mt-5 flex flex-wrap gap-2">
-          {(["Landing", "DarkAuction", "Seller", "Buyer", "Outsider", "Inspector", "Challenge"] as RoleView[]).map((role) => (
-            <button
-              key={role}
-              className={`rounded-full px-4 py-2 text-sm font-semibold ${statusPillClass(view === role)}`}
-              onClick={() => setView(role)}
-            >
-              {role === "Landing"
-                ? "Home"
-                : role === "DarkAuction"
-                  ? "Dark Auction"
-                  : `${role} View`}
+        <nav className="mt-2 flex-1 space-y-0.5">
+          {NAV_ITEMS.map((item) => (
+            <button key={item.key} className={`sidebar-nav-item ${view === item.key ? "active" : ""}`} onClick={() => setView(item.key)} title={sidebarCollapsed ? item.label : undefined}>
+              <NavIcon type={item.icon} /><span className="nav-label">{item.label}</span>
             </button>
           ))}
+        </nav>
+        <div className="mx-4 my-3 border-t border-[#E2E8F0]" />
+        <div className="space-y-0.5 pb-2">
+          <button className="sidebar-nav-item" onClick={() => void refreshLedger()} disabled={busy || loading}>
+            <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+            <span className="nav-label">{loading ? "Refreshing..." : "Refresh"}</span>
+          </button>
+        </div>
+        {!sidebarCollapsed && (
+          <div className="border-t border-[#E2E8F0] px-4 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#14B8A6] to-[#0D9488] text-sm font-bold text-white">{aliasOf(seller).charAt(0).toUpperCase()}</div>
+              <div className="min-w-0"><p className="truncate text-sm font-semibold text-[#1E293B]">{aliasOf(seller)}</p><p className="text-xs text-[#64748B]">Network Admin</p></div>
+            </div>
+          </div>
+        )}
+      </aside>
+
+      {/* Main */}
+      <div className={`dashboard-main ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+        <header className="dashboard-header">
+          <div><h2 className="text-xl font-bold text-[#1E293B]" style={{ fontFamily: "Sora" }}>Hello! {aliasOf(seller)}</h2><p className="mt-0.5 text-sm text-[#64748B]">Welcome to your private trading dashboard.</p></div>
+          <div className="flex items-center gap-4">
+            <div className="search-input hidden md:flex"><svg className="h-4 w-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg><input type="text" placeholder="Search..." readOnly /></div>
+            <div className="hidden items-center gap-2 text-sm text-[#64748B] lg:flex">
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+              <span className="font-medium">{dateStr}</span><span className="text-slate-300">|</span>
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+              <span className="font-medium">{timeStr}</span>
+            </div>
+            <div className="notification-bell"><svg className="h-5 w-5 text-[#64748B]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>{(detectedCompletions.length > 0 || error) && <span className="dot" />}</div>
+          </div>
+        </header>
+
+        <div className="px-8 pt-2">
+          {status && <div className="animate-slide-up mb-3 flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"><svg className="h-5 w-5 flex-shrink-0 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg><span>{status}</span><button className="ml-auto text-emerald-600" onClick={() => setStatus(null)}><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button></div>}
+          {error && <div className="animate-slide-up mb-3 flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><svg className="h-5 w-5 flex-shrink-0 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg><span>{error}</span><button className="ml-auto text-red-600" onClick={() => setError(null)}><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button></div>}
         </div>
 
-        {status ? <p className="mt-4 rounded-lg bg-signal-mint/15 px-3 py-2 text-sm text-shell-950">{status}</p> : null}
-        {error ? <p className="mt-4 rounded-lg bg-signal-coral/15 px-3 py-2 text-sm text-signal-coral">{error}</p> : null}
-        {loading ? <p className="mt-4 text-sm text-signal-slate">Refreshing ledger data...</p> : null}
-      </section>
+        <div className="dashboard-content">
+          {view === "Landing" && <LandingPage onOpenConsole={() => setView("Seller")} onOpenInspector={() => setView("Inspector")} onOpenDarkAuction={() => setView("DarkAuction")} stats={{ tradeIntents: tradeIntents.length, sellerNegotiations: sellerNegotiationsForSelection.length, buyerNegotiations: buyerNegotiationsForSelection.length, completedDeals: completedTotalDisplay, settlements: outsiderSettlements.length, auditRecords: outsiderAudits.length }} parties={availableParties.slice(0, 10)} />}
+          {view === "DarkAuction" && <div className="animate-fade-rise"><DarkAuctionView /></div>}
 
-      {view === "Landing" ? (
-        <LandingPage
-          onOpenConsole={() => setView("Seller")}
-          onOpenInspector={() => setView("Inspector")}
-          onOpenDarkAuction={() => setView("DarkAuction")}
-        />
-      ) : null}
-
-      {view === "DarkAuction" ? <DarkAuctionView /> : null}
-
-      {view === "Seller" ? (
-        <section className="mt-6 grid animate-fade-rise gap-6 lg:grid-cols-2">
-          <article className="rounded-2xl border border-shell-700 bg-white p-5">
-            <h2 className="text-xl font-semibold text-shell-950">Create Trade Intent</h2>
-            <p className="mt-1 text-sm text-signal-slate">Seller creates intents. This is the only creation form in this UI.</p>
-
-            <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-              Instrument
-              <input
-                className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                value={instrument}
-                onChange={(event) => setInstrument(event.target.value)}
-              />
-            </label>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                Quantity
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                  value={quantity}
-                  onChange={(event) => setQuantity(event.target.value)}
-                />
-              </label>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                Min Price
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                  value={minPrice}
-                  onChange={(event) => setMinPrice(event.target.value)}
-                />
-              </label>
-            </div>
-
-            <button
-              className="mt-4 w-full rounded-md bg-shell-950 px-4 py-2 text-sm font-semibold text-shell-900"
-              onClick={() => void createTradeIntent()}
-              disabled={busy}
-            >
-              Create Trade Intent
-            </button>
-
-            <div className="mt-5">
-              <p className="text-sm font-semibold text-shell-950">Current Seller Intents ({tradeIntents.length})</p>
-              <div className="mt-2 space-y-2">
-                {tradeIntents.slice(0, 5).map((intent) => (
-                  <div key={intent.contractId} className="rounded-md border border-shell-700/70 px-3 py-2 text-sm text-signal-slate">
-                    <div className="font-semibold text-shell-950">{intent.payload.instrument}</div>
-                    <div>Qty {optionalToNumber(intent.payload.quantity)} | Min {optionalToNumber(intent.payload.minPrice)}</div>
-                    <div className="mt-2 rounded-md border border-shell-700/60 bg-shell-900/30 p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Contract ID</span>
-                        <button
-                          className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
-                          onClick={() => void copyContractId(intent.contractId)}
-                          type="button"
-                        >
-                          Copy CID
-                        </button>
-                      </div>
-                      <code className="mt-1 block break-all text-xs font-mono text-shell-950">{intent.contractId}</code>
-                    </div>
-                  </div>
-                ))}
-                {tradeIntents.length === 0 ? <p className="text-sm text-signal-slate">No intents yet.</p> : null}
+          {view === "Seller" && (
+            <section className="stagger-children grid gap-6 lg:grid-cols-2">
+              <div className="dash-card"><div className="mb-4 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-teal-50 to-teal-100"><NavIcon type="upload" className="h-5 w-5 text-[#14B8A6]" /></div><div><h2 className="text-lg font-semibold text-[#1E293B]">Create Trade Intent</h2><p className="text-sm text-[#64748B]">Post intents for the market.</p></div></div>
+                <label className={`mt-4 block ${lc}`}>Instrument<input className={ic} value={instrument} onChange={(e) => setInstrument(e.target.value)} /></label>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className={lc}>Quantity<input className={ic} value={quantity} onChange={(e) => setQuantity(e.target.value)} /></label><label className={lc}>Min Price<input className={ic} value={minPrice} onChange={(e) => setMinPrice(e.target.value)} /></label></div>
+                <button className="btn-dark mt-5 w-full rounded-xl py-3" onClick={() => void createTradeIntent()} disabled={busy}>Create Trade Intent</button>
+                <div className="mt-5"><div className="flex items-center justify-between"><p className="text-sm font-semibold text-[#1E293B]">Seller Intents</p><span className="badge badge-mint">{tradeIntents.length}</span></div>
+                  <div className="mt-3 space-y-2">{tradeIntents.slice(0, 5).map((i) => (<div key={i.contractId} className="rounded-xl border border-[#E2E8F0] bg-slate-50 p-3 text-sm"><div className="flex items-center justify-between"><span className="font-semibold text-[#1E293B]">{i.payload.instrument}</span><button className="rounded-lg border border-[#E2E8F0] bg-white px-2 py-1 text-xs font-medium text-[#64748B]" onClick={() => void copyContractId(i.contractId)}>Copy</button></div><div className="mt-1 text-[#64748B]">Qty {optionalToNumber(i.payload.quantity)} | Min {optionalToNumber(i.payload.minPrice)}</div></div>))}{tradeIntents.length === 0 && <p className="text-sm text-[#64748B]">No intents yet.</p>}</div>
+                </div>
               </div>
-            </div>
-          </article>
-
-          <article className="rounded-2xl border border-shell-700 bg-white p-5">
-            <h2 className="text-xl font-semibold text-shell-950">Seller Negotiation</h2>
-            <p className="mt-1 text-sm text-signal-slate">Seller sees buyer responses and can negotiate back.</p>
-
-            <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-              Negotiation Contract
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                value={selectedSellerNegotiation?.contractId ?? ""}
-                onChange={(event) => setSellerNegotiationCid(event.target.value)}
-              >
-                <option value="">Select negotiation</option>
-                {sellerNegotiationsForSelection.map((row) => (
-                  <option key={row.contractId} value={row.contractId}>
-                    {row.payload.instrument} • {shortId(row.contractId)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {selectedSellerNegotiation ? (
-              <div className="mt-3 rounded-md border border-shell-700/70 bg-shell-900/30 px-3 py-2 text-sm text-signal-slate">
-                <div className="font-semibold text-shell-950">{selectedSellerNegotiation.payload.instrument}</div>
-                <div>{selectedTerms(selectedSellerNegotiation.payload)}</div>
-                <div>
-                  Seller accepted: {String(selectedSellerNegotiation.payload.sellerAccepted)} | Buyer accepted: {String(selectedSellerNegotiation.payload.buyerAccepted)}
-                </div>
-                <div>
-                  Seller commit: {shortId(optionalText(selectedSellerNegotiation.payload.sellerCommitmentHash))}
-                </div>
-                <div>
-                  Buyer commit: {shortId(optionalText(selectedSellerNegotiation.payload.buyerCommitmentHash))}
-                </div>
-                <div className="mt-2 rounded-md border border-shell-700/60 bg-white/80 p-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Current CID</span>
-                    <button
-                      className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
-                      onClick={() => void copyContractId(selectedSellerNegotiation.contractId)}
-                      type="button"
-                    >
-                      Copy CID
-                    </button>
-                  </div>
-                  <code className="mt-1 block break-all text-xs font-mono text-shell-950">{selectedSellerNegotiation.contractId}</code>
-                </div>
-                {sellerLastGeneratedCid ? (
-                  <div className="mt-2 rounded-md border border-signal-mint/35 bg-signal-mint/10 p-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Last New CID</span>
-                      <button
-                        className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
-                        onClick={() => void copyContractId(sellerLastGeneratedCid)}
-                        type="button"
-                      >
-                        Copy CID
-                      </button>
-                    </div>
-                    <code className="mt-1 block break-all text-xs font-mono text-shell-950">{sellerLastGeneratedCid}</code>
-                  </div>
-                ) : null}
+              <div className="dash-card"><div className="mb-4 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-purple-50 to-purple-100"><svg className="h-5 w-5 text-[#8B5CF6]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg></div><div><h2 className="text-lg font-semibold text-[#1E293B]">Seller Negotiation</h2><p className="text-sm text-[#64748B]">View buyer responses.</p></div></div>
+                <label className={`mt-4 block ${lc}`}>Negotiation<select className={ic} value={selectedSellerNegotiation?.contractId ?? ""} onChange={(e) => setSellerNegotiationCid(e.target.value)}><option value="">Select</option>{sellerNegotiationsForSelection.map((r) => <option key={r.contractId} value={r.contractId}>{r.payload.instrument} - {shortId(r.contractId)}</option>)}</select></label>
+                {selectedSellerNegotiation ? <div className="mt-3 rounded-xl border border-[#E2E8F0] bg-slate-50 p-3 text-sm"><div className="font-semibold text-[#1E293B]">{selectedSellerNegotiation.payload.instrument}</div><div className="mt-1 text-[#64748B]">{selectedTerms(selectedSellerNegotiation.payload)}</div><div className="mt-1 flex gap-3 text-xs text-[#64748B]"><span>Seller: {selectedSellerNegotiation.payload.sellerAccepted ? <span className="text-emerald-600">accepted</span> : "pending"}</span><span>Buyer: {selectedSellerNegotiation.payload.buyerAccepted ? <span className="text-emerald-600">accepted</span> : "pending"}</span></div>{sellerLastGeneratedCid && <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-700">New: {shortId(sellerLastGeneratedCid)}</div>}</div> : <p className="mt-3 text-sm text-[#64748B]">{sellerNegotiationsForSelection.length > 0 ? "Select a negotiation." : "No negotiations yet."}</p>}
+                <div className="mt-4 grid gap-4 sm:grid-cols-2"><label className={lc}>Qty<input className={ic} value={negotiationQty} onChange={(e) => setNegotiationQty(e.target.value)} /></label><label className={lc}>Unit Price<input className={ic} value={negotiationPrice} onChange={(e) => setNegotiationPrice(e.target.value)} /></label></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2"><button className="btn-primary rounded-xl py-2.5" onClick={() => void runSellerAcceptOffer()} disabled={busy || !selectedSellerNegotiation || !sellerCanAccept}>Accept</button><button className="btn-secondary rounded-xl py-2.5" onClick={() => void runSellerNegotiate()} disabled={busy || !selectedSellerNegotiation}>Negotiate</button></div>
               </div>
-            ) : (
-              <p className="mt-3 text-sm text-signal-slate">
-                {sellerNegotiationsForSelection.length > 0
-                  ? "Select a negotiation to continue."
-                  : "No seller-visible negotiations yet."}
-              </p>
-            )}
+            </section>
+          )}
 
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                Qty
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                  value={negotiationQty}
-                  onChange={(event) => setNegotiationQty(event.target.value)}
-                />
-              </label>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                Unit Price
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                  value={negotiationPrice}
-                  onChange={(event) => setNegotiationPrice(event.target.value)}
-                />
-              </label>
-            </div>
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <button
-                className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => void runSellerAcceptOffer()}
-                disabled={busy || !selectedSellerNegotiation || !sellerCanAccept}
-              >
-                Accept Offer
-              </button>
-              <button
-                className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => void runSellerNegotiate()}
-                disabled={busy || !selectedSellerNegotiation}
-              >
-                Negotiate
-              </button>
-            </div>
-            {selectedSellerNegotiation && !hasSubmittedTerms(selectedSellerNegotiation.payload) ? (
-              <p className="mt-2 text-xs text-signal-slate">Accept is disabled until qty and unit price terms exist.</p>
-            ) : null}
-          </article>
-        </section>
-      ) : null}
-
-      {view === "Buyer" ? (
-        <section className="mt-6 grid animate-fade-rise gap-6 lg:grid-cols-2">
-          <article className="rounded-2xl border border-shell-700 bg-white p-5 lg:col-span-2">
-            <h2 className="text-xl font-semibold text-shell-950">All Trade Intents</h2>
-            <p className="mt-1 text-sm text-signal-slate">
-              Buyer can review every seller intent and jump straight into negotiation.
-            </p>
-            <div className="mt-3 grid gap-2">
-              {tradeIntents.map((intent) => {
-                return (
-                  <div key={intent.contractId} className="rounded-md border border-shell-700/70 px-3 py-2 text-sm">
-                    <div className="font-semibold text-shell-950">{intent.payload.instrument}</div>
-                    <div className="text-signal-slate">
-                      Qty {optionalToNumber(intent.payload.quantity)} | Min {optionalToNumber(intent.payload.minPrice)}
-                    </div>
-                    <div className="mt-2">
-                      <button
-                        className="rounded-md border border-shell-700 px-3 py-1 text-xs font-semibold text-shell-950 disabled:cursor-not-allowed disabled:text-signal-slate"
-                        onClick={() => void runBuyerNegotiateFromIntent(intent)}
-                        disabled={busy}
-                      >
-                        Negotiate
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-              {tradeIntents.length === 0 ? <p className="text-sm text-signal-slate">No trade intents available.</p> : null}
-            </div>
-          </article>
-
-          <article className="rounded-2xl border border-shell-700 bg-white p-5 lg:col-span-2">
-            <h2 className="text-xl font-semibold text-shell-950">Buyer Negotiation View</h2>
-            <p className="mt-1 text-sm text-signal-slate">
-              Buyer sees seller proposals on each negotiation and can counter, commit/reveal, accept, or reject.
-            </p>
-
-            <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-              Negotiation Contract
-              <select
-                className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                value={selectedBuyerNegotiation?.contractId ?? ""}
-                onChange={(event) => setBuyerNegotiationCid(event.target.value)}
-                disabled={buyerNegotiationsForSelection.length === 0}
-              >
-                <option value="">Select negotiation</option>
-                {buyerNegotiationsForSelection.map((row) => (
-                  <option key={row.contractId} value={row.contractId}>
-                    {row.payload.instrument} • {shortId(row.contractId)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {selectedIntentInstrument ? (
-              <p className="mt-2 text-xs text-signal-slate">
-                Scoped to intent instrument: <span className="font-semibold text-shell-950">{selectedIntentInstrument}</span>
-              </p>
-            ) : null}
-
-            {selectedBuyerNegotiation ? (
-              <div className="mt-3 rounded-md border border-shell-700/70 bg-shell-900/30 px-3 py-2 text-sm text-signal-slate">
-                <div className="font-semibold text-shell-950">{selectedBuyerNegotiation.payload.instrument}</div>
-                <div>{selectedTerms(selectedBuyerNegotiation.payload)}</div>
-                <div>
-                  Seller accepted: {String(selectedBuyerNegotiation.payload.sellerAccepted)} | Buyer accepted: {String(selectedBuyerNegotiation.payload.buyerAccepted)}
-                </div>
-                <div>
-                  Reveal status: seller={String(selectedBuyerNegotiation.payload.sellerTermsRevealed)} buyer={String(selectedBuyerNegotiation.payload.buyerTermsRevealed)}
-                </div>
-                <div className="mt-2 rounded-md border border-shell-700/60 bg-white/80 p-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Current CID</span>
-                    <button
-                      className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
-                      onClick={() => void copyContractId(selectedBuyerNegotiation.contractId)}
-                      type="button"
-                    >
-                      Copy CID
-                    </button>
-                  </div>
-                  <code className="mt-1 block break-all text-xs font-mono text-shell-950">{selectedBuyerNegotiation.contractId}</code>
-                </div>
-                {buyerLastGeneratedCid ? (
-                  <div className="mt-2 rounded-md border border-signal-mint/35 bg-signal-mint/10 p-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Last New CID</span>
-                      <button
-                        className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
-                        onClick={() => void copyContractId(buyerLastGeneratedCid)}
-                        type="button"
-                      >
-                        Copy CID
-                      </button>
-                    </div>
-                    <code className="mt-1 block break-all text-xs font-mono text-shell-950">{buyerLastGeneratedCid}</code>
-                  </div>
-                ) : null}
+          {view === "Buyer" && (
+            <section className="stagger-children grid gap-6">
+              <div className="dash-card"><div className="mb-4 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-50 to-orange-100"><svg className="h-5 w-5 text-[#F97316]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" /></svg></div><div><h2 className="text-lg font-semibold text-[#1E293B]">Trade Intents</h2><p className="text-sm text-[#64748B]">Review and negotiate.</p></div><span className="badge badge-amber ml-auto">{tradeIntents.length}</span></div>
+                <div className="grid gap-2">{tradeIntents.map((i) => <div key={i.contractId} className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-slate-50 p-3 text-sm"><div><span className="font-semibold text-[#1E293B]">{i.payload.instrument}</span><span className="ml-3 text-[#64748B]">Qty {optionalToNumber(i.payload.quantity)} | Min {optionalToNumber(i.payload.minPrice)}</span></div><button className="btn-primary rounded-lg px-4 py-1.5 text-xs" onClick={() => void runBuyerNegotiateFromIntent(i)} disabled={busy}>Negotiate</button></div>)}{tradeIntents.length === 0 && <p className="text-sm text-[#64748B]">No intents.</p>}</div>
               </div>
-            ) : (
-              <p className="mt-3 text-sm text-signal-slate">
-                {buyerNegotiationsForSelection.length > 0
-                  ? "Select a negotiation to continue."
-                  : selectedIntentInstrument
-                    ? `No negotiation exists yet for ${selectedIntentInstrument}.`
-                    : "No buyer-visible negotiations yet."}
-              </p>
-            )}
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                Qty
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                  value={negotiationQty}
-                  onChange={(event) => setNegotiationQty(event.target.value)}
-                />
-              </label>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-signal-slate">
-                Unit Price
-                <input
-                  className="mt-1 w-full rounded-md border border-shell-700 px-3 py-2 text-sm"
-                  value={negotiationPrice}
-                  onChange={(event) => setNegotiationPrice(event.target.value)}
-                />
-              </label>
-            </div>
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <button
-                className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => void runBuyerAcceptOffer()}
-                disabled={busy || !selectedBuyerNegotiation || !buyerCanAccept}
-              >
-                Accept Offer
-              </button>
-              <button
-                className="rounded-md border border-shell-700 px-4 py-2 text-sm font-semibold text-shell-950"
-                onClick={() => void runBuyerNegotiate()}
-                disabled={busy || !selectedBuyerNegotiation}
-              >
-                Negotiate
-              </button>
-            </div>
-            {selectedBuyerNegotiation && !hasSubmittedTerms(selectedBuyerNegotiation.payload) ? (
-              <p className="mt-2 text-xs text-signal-slate">Accept is disabled until qty and unit price terms exist.</p>
-            ) : null}
-          </article>
-        </section>
-      ) : null}
-
-      {view === "Outsider" ? (
-        <section className="mt-6 animate-fade-rise">
-          <article className="rounded-2xl border border-shell-700 bg-white p-5">
-            <h2 className="text-xl font-semibold text-shell-950">Outsider Outcome Signal</h2>
-            <p className="mt-1 text-sm text-signal-slate">Auto-refreshes every 2 seconds while this view is open.</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-1">
-              <div className="rounded-lg border border-shell-700/70 bg-shell-900/40 p-4 text-sm text-signal-slate">
-                <div className="text-xs uppercase tracking-[0.12em]">Completed (Total)</div>
-                <div className="mt-1 text-2xl font-semibold text-shell-950">{completedTotalDisplay}</div>
+              <div className="dash-card"><div className="mb-4 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-50 to-blue-100"><NavIcon type="download" className="h-5 w-5 text-blue-500" /></div><div><h2 className="text-lg font-semibold text-[#1E293B]">Buyer Negotiation</h2><p className="text-sm text-[#64748B]">Counter, accept, or reject.</p></div></div>
+                <label className={`mt-4 block ${lc}`}>Negotiation<select className={ic} value={selectedBuyerNegotiation?.contractId ?? ""} onChange={(e) => setBuyerNegotiationCid(e.target.value)} disabled={!buyerNegotiationsForSelection.length}><option value="">Select</option>{buyerNegotiationsForSelection.map((r) => <option key={r.contractId} value={r.contractId}>{r.payload.instrument} - {shortId(r.contractId)}</option>)}</select></label>
+                {selectedBuyerNegotiation ? <div className="mt-3 rounded-xl border border-[#E2E8F0] bg-slate-50 p-3 text-sm"><div className="font-semibold text-[#1E293B]">{selectedBuyerNegotiation.payload.instrument}</div><div className="mt-1 text-[#64748B]">{selectedTerms(selectedBuyerNegotiation.payload)}</div><div className="mt-1 flex gap-3 text-xs text-[#64748B]"><span>Seller: {selectedBuyerNegotiation.payload.sellerAccepted ? <span className="text-emerald-600">accepted</span> : "pending"}</span><span>Buyer: {selectedBuyerNegotiation.payload.buyerAccepted ? <span className="text-emerald-600">accepted</span> : "pending"}</span></div>{buyerLastGeneratedCid && <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-700">New: {shortId(buyerLastGeneratedCid)}</div>}</div> : <p className="mt-3 text-sm text-[#64748B]">{buyerNegotiationsForSelection.length > 0 ? "Select a negotiation." : "No negotiations yet."}</p>}
+                <div className="mt-4 grid gap-4 sm:grid-cols-2"><label className={lc}>Qty<input className={ic} value={negotiationQty} onChange={(e) => setNegotiationQty(e.target.value)} /></label><label className={lc}>Unit Price<input className={ic} value={negotiationPrice} onChange={(e) => setNegotiationPrice(e.target.value)} /></label></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2"><button className="btn-primary rounded-xl py-2.5" onClick={() => void runBuyerAcceptOffer()} disabled={busy || !selectedBuyerNegotiation || !buyerCanAccept}>Accept</button><button className="btn-secondary rounded-xl py-2.5" onClick={() => void runBuyerNegotiate()} disabled={busy || !selectedBuyerNegotiation}>Negotiate</button></div>
               </div>
-            </div>
+            </section>
+          )}
 
-            <div className="mt-5">
-              <p className="text-sm font-semibold text-shell-950">Live Accepted Feed</p>
-              <div className="mt-2 space-y-2">
-                {detectedCompletions.slice(0, 5).map((row) => (
-                  <div key={`${row.contractId}-live`} className="rounded-md border border-signal-mint/35 bg-signal-mint/10 px-3 py-2 text-sm text-signal-slate">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-semibold text-shell-950">{row.instrument}</div>
-                      <span className="rounded-full border border-signal-mint/40 bg-white px-2 py-1 text-[11px] text-signal-mint">
-                        just detected
-                      </span>
-                    </div>
-                    <div className="mt-1">Qty {row.quantity ?? "-"} | Unit {row.unitPrice ?? "-"}</div>
-                    <div className="mt-2 rounded-md border border-signal-mint/35 bg-white/85 p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Contract ID</span>
-                        <button
-                          className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
-                          onClick={() => void copyContractId(row.contractId)}
-                          type="button"
-                        >
-                          Copy CID
-                        </button>
-                      </div>
-                      <code className="mt-1 block break-all text-xs font-mono text-shell-950">{row.contractId}</code>
-                    </div>
-                  </div>
-                ))}
-                {detectedCompletions.length === 0 ? (
-                  <p className="text-sm text-signal-slate">No new accepted outcomes detected in this session yet.</p>
-                ) : null}
+          {view === "Outsider" && (
+            <section className="stagger-children space-y-6"><div className="dash-card">
+              <div className="mb-4 flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-50 to-indigo-100"><NavIcon type="eye" className="h-5 w-5 text-indigo-500" /></div><div><h2 className="text-lg font-semibold text-[#1E293B]">Outsider Signal</h2><p className="text-sm text-[#64748B]">Auto-refreshes every 2s.</p></div><div className="ml-auto flex items-center gap-2"><span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" /><span className="text-xs font-medium text-emerald-600">Live</span></div></div>
+              <div className="mb-6 grid gap-4 sm:grid-cols-3">
+                <div className="rounded-xl border border-[#E2E8F0] bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wider text-[#64748B]">Completed</p><p className="mt-1 text-2xl font-bold text-[#1E293B]" style={{ fontFamily: "Sora" }}>{completedTotalDisplay}</p></div>
+                <div className="rounded-xl border border-[#E2E8F0] bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wider text-[#64748B]">Detections</p><p className="mt-1 text-2xl font-bold text-[#1E293B]" style={{ fontFamily: "Sora" }}>{detectedCompletions.length}</p></div>
+                <div className="rounded-xl border border-[#E2E8F0] bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wider text-[#64748B]">Signals</p><p className="mt-1 text-2xl font-bold text-[#1E293B]" style={{ fontFamily: "Sora" }}>{outsiderAcceptedSignals.length}</p></div>
               </div>
-            </div>
+              <p className="text-sm font-semibold text-[#1E293B]">Live Feed</p>
+              <div className="mt-3 space-y-2">{detectedCompletions.slice(0, 5).map((r) => <div key={`${r.contractId}-l`} className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm"><div className="flex items-center justify-between"><span className="font-semibold text-[#1E293B]">{r.instrument}</span><span className="badge badge-mint">detected</span></div><div className="mt-1 text-[#64748B]">Qty {r.quantity ?? "-"} | Unit {r.unitPrice ?? "-"}</div></div>)}{!detectedCompletions.length && <p className="text-sm text-[#64748B]">No outcomes yet.</p>}</div>
+              <p className="mt-6 text-sm font-semibold text-[#1E293B]">Recent Outcomes</p>
+              <div className="mt-3 space-y-2">{outsiderAcceptedSignals.map((s) => <div key={s.contractId} className="rounded-xl border border-[#E2E8F0] bg-slate-50 p-3 text-sm"><div className="flex items-center justify-between"><span className="font-semibold text-[#1E293B]">{s.instrument}</span><span className="badge badge-purple">{s.source}</span></div><div className="mt-1 text-[#64748B]">Qty {s.quantity ?? "-"} | Unit {s.unitPrice ?? "-"}</div></div>)}{!outsiderAcceptedSignals.length && <p className="text-sm text-[#64748B]">No outcomes.</p>}</div>
+            </div></section>
+          )}
 
-            <div className="mt-5">
-              <p className="text-sm font-semibold text-shell-950">Recent Accepted Outcomes (CID Included)</p>
-              <div className="mt-2 space-y-2">
-                {outsiderAcceptedSignals.map((signal) => (
-                  <div key={signal.contractId} className="rounded-md border border-shell-700/70 bg-shell-900/20 px-3 py-2 text-sm text-signal-slate">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-semibold text-shell-950">{signal.instrument}</div>
-                      <span className="rounded-full border border-shell-700 bg-white px-2 py-1 text-[11px] text-signal-slate">
-                        {signal.source}
-                      </span>
-                    </div>
-                    <div className="mt-1">
-                      Qty {signal.quantity ?? "-"} | Unit {signal.unitPrice ?? "-"}
-                    </div>
-                    <div className="mt-2 rounded-md border border-shell-700/60 bg-white/80 p-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-signal-slate">Contract ID</span>
-                        <button
-                          className="rounded border border-shell-700 bg-white px-2 py-1 text-[11px] font-semibold text-shell-950"
-                          onClick={() => void copyContractId(signal.contractId)}
-                          type="button"
-                        >
-                          Copy CID
-                        </button>
-                      </div>
-                      <code className="mt-1 block break-all text-xs font-mono text-shell-950">{signal.contractId}</code>
-                    </div>
-                  </div>
-                ))}
-                {outsiderAcceptedSignals.length === 0 ? (
-                  <p className="text-sm text-signal-slate">No accepted outcomes yet.</p>
-                ) : null}
-              </div>
-            </div>
-          </article>
-        </section>
-      ) : null}
-
-      {view === "Inspector" ? (
-        <section className="mt-6 animate-fade-rise">
-          <ContractVisibilityInspector
-            availableParties={availableParties}
-            activeParty={view}
-          />
-        </section>
-      ) : null}
-
-      {view === "Challenge" ? (
-        <PrivacyChallengeMode
-          partyByRole={{
-            Seller: seller,
-            Buyer: buyer,
-            Outsider: outsider,
-            Inspector: company,
-          }}
-          suggestedIntentCid={suggestedIntentCid}
-          suggestedNegotiationCid={suggestedNegotiationCid}
-        />
-      ) : null}
-
-    </main>
+          {view === "Inspector" && <div className="animate-fade-rise"><ContractVisibilityInspector availableParties={availableParties} activeParty={view} /></div>}
+          {view === "Challenge" && <div className="animate-fade-rise"><PrivacyChallengeMode partyByRole={{ Seller: seller, Buyer: buyer, Outsider: outsider, Inspector: company }} suggestedIntentCid={suggestedIntentCid} suggestedNegotiationCid={suggestedNegotiationCid} /></div>}
+        </div>
+      </div>
+    </div>
   );
 }
