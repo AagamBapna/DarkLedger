@@ -133,7 +133,7 @@ Stop demo:
 make demo-stop
 ```
 
-## Canton L1 Devnet Run
+## Canton L1 Devnet Run (Must do for full functionality)
 
 ```bash
 make build
