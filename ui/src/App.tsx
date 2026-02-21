@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePartyContext } from "./context/PartyContext";
 import {
   TEMPLATE_IDS,
@@ -168,6 +168,7 @@ export default function App() {
   const [negotiationPrice, setNegotiationPrice] = useState("99");
   const [negotiationSide, setNegotiationSide] = useState<"Buy" | "Sell">("Sell");
   const [negotiationSalt, setNegotiationSalt] = useState("simple-demo-salt");
+  const startupResetDone = useRef(false);
 
   const sellerNegotiationsForSelection = useMemo(
     () => collapseNegotiationLanes(sellerNegotiations),
@@ -257,9 +258,31 @@ export default function App() {
   }, [buyerAgent, outsider, seller, sellerAgent]);
 
   useEffect(() => {
-    void refreshLedger();
+    if (startupResetDone.current) {
+      return;
+    }
+    startupResetDone.current = true;
+
+    void (async () => {
+      try {
+        const existingIntents = await queryTradeIntents(seller);
+        await Promise.all(existingIntents.map((intent) => exerciseChoice(
+          seller,
+          TEMPLATE_IDS.tradeIntent,
+          intent.contractId,
+          "ArchiveIntent",
+          {},
+        )));
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setError(message);
+      } finally {
+        await refreshLedger();
+      }
+    })();
+
     return () => {};
-  }, [refreshLedger]);
+  }, [refreshLedger, seller]);
 
   const runAction = useCallback(async (description: string, action: () => Promise<void>) => {
     setBusy(true);
@@ -450,6 +473,7 @@ export default function App() {
             buyerTermsRevealed: false,
           },
         );
+
         setSelectedIntentInstrument(intent.payload.instrument);
         setBuyerNegotiationCid(created.contractId);
       } else {

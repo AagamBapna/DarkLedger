@@ -1,4 +1,4 @@
 {
   "seller_auto_reprice": true,
-  "buyer_auto_reprice": false
+  "buyer_auto_reprice": true
 }
